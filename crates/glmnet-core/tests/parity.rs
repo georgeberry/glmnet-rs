@@ -1,6 +1,6 @@
 //! Parity against R glmnet 5.0. Regenerate fixtures with `Rscript scripts/gen_fixtures.R`.
 
-use glmnet_core::{elnet_naive, lognet, Control, FitConfig};
+use glmnet_core::{elnet_naive, fishnet, lognet, Control, FitConfig};
 use serde::{Deserialize, Deserializer};
 use std::path::PathBuf;
 
@@ -136,9 +136,19 @@ fn matches_r_glmnet() {
     let mut failures = Vec::new();
 
     for f in load_all() {
-        // Fixture family is encoded in the filename prefix: `bin_*` is binomial.
+        // Fixture family is encoded in the filename prefix: `bin_*` binomial,
+        // `pois_*` Poisson, everything else Gaussian.
         let solved = if f.name.starts_with("bin_") {
             lognet(&f.x, &f.y, f.n, f.p, &cfg_of(&f)).map(|fit| Solved {
+                lmu: fit.lmu,
+                lambda: fit.lambda,
+                a0: fit.a0,
+                beta: fit.beta,
+                dev_ratio: fit.dev_ratio,
+                npasses: fit.npasses,
+            })
+        } else if f.name.starts_with("pois_") {
+            fishnet(&f.x, &f.y, f.n, f.p, &cfg_of(&f)).map(|fit| Solved {
                 lmu: fit.lmu,
                 lambda: fit.lambda,
                 a0: fit.a0,

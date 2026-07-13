@@ -31,7 +31,12 @@ def test_matches_r_glmnet(path):
     n, p = d["n"], d["p"]
     X = np.asarray(d["x"], dtype=float).reshape((n, p), order="F")
     y = np.asarray(d["y"], dtype=float)
-    family = "binomial" if path.stem.startswith("bin_") else "gaussian"
+    if path.stem.startswith("bin_"):
+        family = "binomial"
+    elif path.stem.startswith("pois_"):
+        family = "poisson"
+    else:
+        family = "gaussian"
 
     fit = glmnet(
         X,
@@ -230,13 +235,18 @@ def test_binomial_predict_types_agree():
     assert np.all((resp >= 0) & (resp <= 1))
 
 
-def test_response_type_rejected_for_gaussian():
+def test_gaussian_response_is_identity_link():
+    """For gaussian the response link is the identity, so response == link."""
     rng = np.random.default_rng(11)
     X = rng.standard_normal((40, 4))
     y = rng.standard_normal(40)
     fit = glmnet(X, y)
+    link = fit.predict(X, type="link")
+    resp = fit.predict(X, type="response")
+    np.testing.assert_array_equal(link, resp)
+    # type="class" remains binomial-only.
     with pytest.raises(ValueError, match="binomial"):
-        fit.predict(X, type="response")
+        fit.predict(X, type="class")
 
 
 def test_binomial_rejects_non_binary_y():
@@ -260,6 +270,51 @@ def test_binomial_dev_ratio_monotone_and_bounded():
     assert fit.dev_ratio[0] == pytest.approx(0.0, abs=1e-12)
     assert np.all(np.diff(fit.dev_ratio) >= -1e-9)
     assert fit.dev_ratio[-1] < 1.0
+
+
+# --- poisson-specific behaviour -------------------------------------------
+
+
+def _poisson_data(seed, n=200, p=10, k=3):
+    rng = np.random.default_rng(seed)
+    X = rng.standard_normal((n, p))
+    eta = 0.2 + X[:, :k] @ np.array([0.5, -0.4, 0.3][:k])
+    y = rng.poisson(np.exp(eta)).astype(float)
+    return X, y
+
+
+def test_poisson_predict_response_is_exp_link():
+    X, y = _poisson_data(20)
+    fit = glmnet(X, y, family="poisson")
+    s = fit.lambda_[20]
+    link = fit.predict(X, s=s, type="link").ravel()
+    resp = fit.predict(X, s=s, type="response").ravel()
+    np.testing.assert_allclose(resp, np.exp(link), rtol=1e-12)
+    assert np.all(resp > 0)
+
+
+def test_poisson_rejects_negative_y():
+    rng = np.random.default_rng(21)
+    X = rng.standard_normal((30, 3))
+    y = rng.standard_normal(30)  # has negatives
+    with pytest.raises(ValueError, match="non-negative"):
+        glmnet(X, y, family="poisson")
+
+
+def test_poisson_dev_ratio_monotone_and_bounded():
+    X, y = _poisson_data(22)
+    fit = glmnet(X, y, family="poisson")
+    assert fit.df[0] == 0
+    assert fit.dev_ratio[0] == pytest.approx(0.0, abs=1e-12)
+    assert np.all(np.diff(fit.dev_ratio) >= -1e-9)
+    assert fit.dev_ratio[-1] < 1.0
+
+
+def test_poisson_class_type_rejected():
+    X, y = _poisson_data(23)
+    fit = glmnet(X, y, family="poisson")
+    with pytest.raises(ValueError, match="binomial"):
+        fit.predict(X, type="class")
 
 
 def test_sklearn_logistic_matches_sklearn():

@@ -15,6 +15,10 @@ pub enum FitError {
     ProbMinReached,
     /// jerr = 9001. A class probability exceeded `1 - pmin` at the null model.
     ProbMaxReached,
+    /// jerr = 8888. A Poisson response was negative.
+    NegativeResponse,
+    /// jerr = 9999. The observation weights summed to <= 0.
+    NonPositiveWeightSum,
 }
 
 /// Conditions that truncate the lambda path but still return the lambdas
@@ -36,6 +40,8 @@ impl FitError {
             // glmnetpp reports these as 8001+m / 9001+m; at the null model m = 0.
             FitError::ProbMinReached => 8001,
             FitError::ProbMaxReached => 9001,
+            FitError::NegativeResponse => 8888,
+            FitError::NonPositiveWeightSum => 9999,
         }
     }
 }
@@ -69,6 +75,15 @@ impl std::fmt::Display for FitError {
                     f,
                     "null probability exceeded 1-pmin; response is ~constant (jerr 9001)"
                 )
+            }
+            FitError::NegativeResponse => {
+                write!(
+                    f,
+                    "negative response; not permitted for the Poisson family (jerr 8888)"
+                )
+            }
+            FitError::NonPositiveWeightSum => {
+                write!(f, "observation weights sum to <= 0 (jerr 9999)")
             }
         }
     }

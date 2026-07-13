@@ -101,20 +101,25 @@ class GlmnetPath:
     def predict(self, X, s=None, type="link"):
         """Predictions. Returns `(n, len(s))`, or `(n, lmu)` when `s is None`.
 
-        `type="link"` returns the linear predictor. For `family="binomial"`,
-        `type="response"` returns the class-1 probability (the logistic of the
-        link) and `type="class"` returns the 0/1 label at a 0.5 threshold.
+        `type="link"` returns the linear predictor (all families).
+        `type="response"` applies the inverse link: the class-1 probability for
+        binomial, the mean count `exp(eta)` for Poisson (identity for gaussian).
+        `type="class"` (binomial only) returns the 0/1 label at a 0.5 threshold.
         """
         X = np.ascontiguousarray(X, dtype=float)
         c = self.coef(s)
         eta = X @ c[1:] + c[0]
         if type == "link":
             return eta
-        if self.family != "binomial":
-            raise ValueError(f"type={type!r} is only defined for family='binomial'")
         if type == "response":
-            return 1.0 / (1.0 + np.exp(-eta))
+            if self.family == "binomial":
+                return 1.0 / (1.0 + np.exp(-eta))
+            if self.family == "poisson":
+                return np.exp(eta)
+            return eta  # gaussian: identity link
         if type == "class":
+            if self.family != "binomial":
+                raise ValueError("type='class' is only defined for family='binomial'")
             return (eta > 0).astype(float)
         raise ValueError(f"unknown predict type {type!r}")
 
@@ -150,13 +155,15 @@ def glmnet(
 ) -> GlmnetPath:
     """Fit an elastic-net path. Mirrors R's `glmnet`.
 
-    `family` is `"gaussian"` (least squares) or `"binomial"` (two-class
-    logistic); for binomial, `y` must be 0/1 (or observed proportions).
-    `alpha=1` is the lasso, `alpha=0` is ridge. `lambda_` overrides the
-    automatically-generated grid.
+    `family` is `"gaussian"` (least squares), `"binomial"` (two-class logistic),
+    or `"poisson"` (log-link counts). For binomial, `y` must be 0/1 (or observed
+    proportions); for poisson, `y` must be non-negative. `alpha=1` is the lasso,
+    `alpha=0` is ridge. `lambda_` overrides the automatically-generated grid.
     """
-    if family not in ("gaussian", "binomial"):
-        raise ValueError(f"family {family!r} not supported (yet); use 'gaussian' or 'binomial'")
+    if family not in ("gaussian", "binomial", "poisson"):
+        raise ValueError(
+            f"family {family!r} not supported (yet); use 'gaussian', 'binomial' or 'poisson'"
+        )
 
     x = np.ascontiguousarray(x, dtype=float)
     y = np.ascontiguousarray(y, dtype=float).ravel()
@@ -167,6 +174,9 @@ def glmnet(
             raise ValueError("binomial y must be 0/1 or in [0, 1]")
         if uniq.size < 2:
             raise ValueError("binomial y has only one class")
+    elif family == "poisson":
+        if np.any(y < 0):
+            raise ValueError("poisson y must be non-negative")
 
     def _vec(v, name):
         if v is None:

@@ -3,7 +3,8 @@
 Two APIs over one solver:
 
 * :func:`glmnet.glmnet` -- faithful to R. Fits a whole lambda path and returns a
-  :class:`~glmnet._path.GlmnetPath`. ``alpha`` is the elastic-net mixing parameter.
+  :class:`~glmnet._path.GlmnetPath`. ``alpha`` is the elastic-net mixing
+  parameter; ``family`` is ``"gaussian"``, ``"binomial"`` or ``"poisson"``.
 * :mod:`glmnet.sklearn` -- ``ElasticNet`` / ``Lasso`` estimators using
   scikit-learn's names, where ``alpha`` is the penalty strength. Requires scikit-learn.
 

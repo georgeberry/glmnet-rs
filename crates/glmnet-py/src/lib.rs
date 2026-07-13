@@ -3,7 +3,7 @@
 //! `coef(s=...)`, the scikit-learn estimators) live in the Python package, where
 //! they are far easier to iterate on.
 
-use glmnet_core::{elnet_naive, lognet, Control, FitConfig};
+use glmnet_core::{elnet_naive, fishnet, lognet, Control, FitConfig};
 use numpy::{IntoPyArray, PyArray2, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -181,9 +181,21 @@ fn elnet_path<'py>(
                 warning: f.warning.map(|w| (format!("{w:?}"), w.jerr())),
             })
             .map_err(|e| PyValueError::new_err(e.to_string()))?,
+        "poisson" => fishnet(&xcm, &yv, n, p, &cfg)
+            .map(|f| CommonFit {
+                lmu: f.lmu,
+                lambda: f.lambda,
+                a0: f.a0,
+                beta: f.beta,
+                dev_ratio: f.dev_ratio,
+                nulldev: f.nulldev,
+                npasses: f.npasses,
+                warning: f.warning.map(|w| (format!("{w:?}"), w.jerr())),
+            })
+            .map_err(|e| PyValueError::new_err(e.to_string()))?,
         other => {
             return Err(PyValueError::new_err(format!(
-                "unknown family {other:?}; expected 'gaussian' or 'binomial'"
+                "unknown family {other:?}; expected 'gaussian', 'binomial' or 'poisson'"
             )))
         }
     };

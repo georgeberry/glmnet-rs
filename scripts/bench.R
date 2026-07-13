@@ -30,6 +30,8 @@ for (nm in cases) {
   # Match the Rust port's solver: naive gaussian, Newton logistic.
   fitfun <- if (fam == "gaussian") {
     function() glmnet(X, y, family = "gaussian", type.gaussian = "naive")
+  } else if (fam == "poisson") {
+    function() glmnet(X, y, family = "poisson")
   } else {
     function() glmnet(X, y, family = "binomial", type.logistic = "Newton")
   }

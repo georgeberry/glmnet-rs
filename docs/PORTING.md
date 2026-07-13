@@ -35,9 +35,10 @@ Two things make this a strong oracle rather than a smoke test:
 - **`lmu` (path length) is compared.** It is data-dependent (see `fdev` below),
   so a mismatch localizes the bug to control flow rather than arithmetic.
 
-Current status: 42/42 fixtures (22 Gaussian + 20 binomial), max relative error
-~1e-14, `npasses` identical to R on every case. `bin_*` fixtures are binomial;
-the Rust parity harness dispatches on that prefix.
+Current status: 62/62 fixtures (22 Gaussian + 20 binomial + 20 Poisson), max
+relative error ~1e-14, `npasses` identical to R on every case. Fixture family is
+encoded in the filename prefix (`bin_*` binomial, `pois_*` Poisson, else
+Gaussian); the Rust parity harness dispatches on it.
 
 Two traps when generating fixtures:
 
@@ -189,18 +190,42 @@ The sklearn map for logistic is cleaner than for least squares — no `ys` facto
 because logistic does not standardize `y`. `LogisticRegression(C, penalty)` sets
 `lambda = 1/(C*N)` and `alpha = l1_ratio` (`penalty="l2"` -> 0, `"l1"` -> 1).
 
+## Poisson (log-link counts) — done
+
+`poisson.rs` ports `ElnetPath<poisson,naive>` for dense `X`, no offset. It reuses
+binomial's IRLS-over-WLS loop almost verbatim; the substance is in the link and
+the deviance bookkeeping:
+
+- **Log link.** Mean `mu = exp(eta)`, and Poisson variance = mean, so the working
+  weight is `w = q*mu` (`q` = observation weights) and the residual is
+  `r = q*y - w`. Column variance is `sum_i w_i x_ij^2`, recomputed each IRLS step.
+- **No variance-collapse stop.** Instead the linear predictor is clamped in
+  magnitude to `log(f64::MAX * 0.1)` before exponentiating, so `exp(eta)` can't
+  overflow. That clamp is the Poisson analogue of binomial's `vmin`.
+- **Two path-layer quirks, both load-bearing** (`elnet_path/poisson_base.hpp`):
+  - `initialize_path` does `sml *= 10`, so the effective `fdev` is **10x larger**
+    (1e-4). Miss this and every Poisson path runs too long.
+  - The early-stop test is `(dev(m) - dev(m-mnl+1)) / dev(m)` — a *relative*
+    change looking back `mnl-1` lambdas — where binomial used an *absolute*
+    one-step change. Different quantity, different lookback.
+- **Deviance.** `dev(m) = (t.eta - sum(w) - dv0) / dev0` with `t = q*y`; the null
+  deviance carries a `-yb + sum_{t>0} t log(y)` correction. Reported
+  `nulldev = 2*sw*dev0`, same shape as binomial.
+- **Errors.** Negative `y` (jerr 8888) and non-positive weight sum (jerr 9999).
+- The zero-bound `fdev` disable applies here too (`pois_nonneg`).
+
+Like binomial, `Point` is concrete over `Dense` for the weighted per-column ops.
+
 ## What's next
 
 In rough order of value:
 
-1. **`poisson`** (`fishnet`) — reuses the IRLS loop already built here; smallest
-   next step. Log-link, watch the `exmx` exponent clamp.
-2. **`gaussian_cov`** — the default solver for `nvars < 500`. Shares the driver;
+1. **`gaussian_cov`** — the default solver for `nvars < 500`. Shares the driver;
    different point solver (maintains a gradient/covariance cache, no strong rule).
 3. **Sparse (CSC)** — `matrix.rs::DesignMatrix` isolates the operations that need
    the `xm`/`xs` correction. Sparse `X` is never centered (that would destroy
    sparsity), so the correction is applied per gradient and per residual update.
    Generalize binomial's `Point` off `Dense` as part of this.
-4. **`multinomial` / `cox`** — both reuse the IRLS loop; cox needs risk-set
+3. **`multinomial` / `cox`** — both reuse the IRLS loop; cox needs risk-set
    gradient machinery.
-5. **`cv.glmnet`** — pure Python, on top of the path object.
+4. **`cv.glmnet`** — pure Python, on top of the path object.

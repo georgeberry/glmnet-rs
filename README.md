@@ -6,9 +6,9 @@ to Rust, with a Python front end.
 Ported from `glmnetpp` (the C++17 core of R glmnet >= 4.1), **not** the legacy
 Fortran, and validated against R glmnet 5.0.
 
-**Status:** Gaussian and two-class binomial (logistic), dense `X`, naive/Newton
-solvers. 42/42 parity fixtures pass at ~1e-14 relative error with iteration
-counts (`npasses`) identical to R. Poisson, multinomial, Cox, the covariance
+**Status:** Gaussian, two-class binomial (logistic), and Poisson, dense `X`,
+naive/Newton solvers. 62/62 parity fixtures pass at ~1e-14 relative error with
+iteration counts (`npasses`) identical to R. Multinomial, Cox, the covariance
 solver, and sparse `X` are not implemented yet — see
 [`docs/PORTING.md`](docs/PORTING.md).
 
@@ -40,6 +40,10 @@ path.df                            # nonzeros per lambda
 # logistic regression, same path object
 lpath = glmnet(X, y01, family="binomial")
 lpath.predict(X, s=0.05, type="response")   # class-1 probability
+
+# poisson counts
+ppath = glmnet(X, counts, family="poisson")
+ppath.predict(X, s=0.05, type="response")   # expected count, exp(eta)
 ```
 
 scikit-learn compatible, using **scikit-learn's** meaning of `alpha`:
@@ -70,6 +74,7 @@ python -m pytest tests/test_python.py      # end-to-end + sklearn agreement
 
 Rscript scripts/gen_fixtures.R             # regenerate Gaussian fixtures (needs R + glmnet)
 Rscript scripts/gen_fixtures_binomial.R    # regenerate binomial fixtures
+Rscript scripts/gen_fixtures_poisson.R     # regenerate Poisson fixtures
 
 python scripts/bench.py                    # wall-clock vs R glmnet on identical data
 cargo run --release -p glmnet-core --example bench_core   # pure-core timings

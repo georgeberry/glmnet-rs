@@ -36,6 +36,10 @@ CASES = [
     ("bin_tall",  10000,   50, "binomial"),
     ("bin_medium", 1000,  200, "binomial"),
     ("bin_wide",    200, 2000, "binomial"),
+    ("pois_small",   200,   20, "poisson"),
+    ("pois_tall",  10000,   50, "poisson"),
+    ("pois_medium", 1000,  200, "poisson"),
+    ("pois_wide",    200, 2000, "poisson"),
 ]
 
 REPEATS = 7
@@ -50,8 +54,10 @@ def make_data(n, p, family, seed):
     eta = X @ beta
     if family == "gaussian":
         y = eta + rng.standard_normal(n)
-    else:
+    elif family == "binomial":
         y = (rng.random(n) < 1.0 / (1.0 + np.exp(-eta))).astype(float)
+    else:  # poisson; scale eta down so counts stay moderate
+        y = rng.poisson(np.exp(0.3 * eta)).astype(float)
     return X, y
 
 
