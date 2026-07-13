@@ -31,10 +31,12 @@ def test_matches_r_glmnet(path):
     n, p = d["n"], d["p"]
     X = np.asarray(d["x"], dtype=float).reshape((n, p), order="F")
     y = np.asarray(d["y"], dtype=float)
+    family = "binomial" if path.stem.startswith("bin_") else "gaussian"
 
     fit = glmnet(
         X,
         y,
+        family=family,
         alpha=d["alpha"],
         nlambda=d["nlambda"],
         lambda_min_ratio=d["lambda_min_ratio"],
@@ -202,3 +204,75 @@ def test_rejects_positive_lower_limit():
     y = rng.standard_normal(30)
     with pytest.raises(ValueError, match="non-positive"):
         glmnet(X, y, lower_limits=0.5)
+
+
+# --- binomial-specific behaviour ------------------------------------------
+
+
+def _logistic_data(seed, n=200, p=10, k=3):
+    rng = np.random.default_rng(seed)
+    X = rng.standard_normal((n, p))
+    eta = X[:, :k] @ np.array([1.5, -1.0, 0.8][:k])
+    y = (rng.random(n) < 1.0 / (1.0 + np.exp(-eta))).astype(float)
+    return X, y
+
+
+def test_binomial_predict_types_agree():
+    X, y = _logistic_data(10)
+    fit = glmnet(X, y, family="binomial")
+    s = fit.lambda_[20]
+    link = fit.predict(X, s=s, type="link").ravel()
+    resp = fit.predict(X, s=s, type="response").ravel()
+    cls = fit.predict(X, s=s, type="class").ravel()
+
+    np.testing.assert_allclose(resp, 1.0 / (1.0 + np.exp(-link)), rtol=1e-12)
+    np.testing.assert_array_equal(cls, (link > 0).astype(float))
+    assert np.all((resp >= 0) & (resp <= 1))
+
+
+def test_response_type_rejected_for_gaussian():
+    rng = np.random.default_rng(11)
+    X = rng.standard_normal((40, 4))
+    y = rng.standard_normal(40)
+    fit = glmnet(X, y)
+    with pytest.raises(ValueError, match="binomial"):
+        fit.predict(X, type="response")
+
+
+def test_binomial_rejects_non_binary_y():
+    rng = np.random.default_rng(12)
+    X = rng.standard_normal((30, 3))
+    with pytest.raises(ValueError, match="0/1"):
+        glmnet(X, rng.standard_normal(30), family="binomial")
+
+
+def test_binomial_rejects_single_class():
+    rng = np.random.default_rng(13)
+    X = rng.standard_normal((30, 3))
+    with pytest.raises(ValueError, match="one class"):
+        glmnet(X, np.ones(30), family="binomial")
+
+
+def test_binomial_dev_ratio_monotone_and_bounded():
+    X, y = _logistic_data(14)
+    fit = glmnet(X, y, family="binomial")
+    assert fit.df[0] == 0
+    assert fit.dev_ratio[0] == pytest.approx(0.0, abs=1e-12)
+    assert np.all(np.diff(fit.dev_ratio) >= -1e-9)
+    assert fit.dev_ratio[-1] < 1.0
+
+
+def test_sklearn_logistic_matches_sklearn():
+    """Our LogisticRegression must match sklearn's liblinear/saga solution."""
+    sklm = pytest.importorskip("sklearn.linear_model")
+    from glmnet.sklearn import LogisticRegression
+
+    X, y = _logistic_data(15, n=300, p=8)
+    C = 2.0  # sklearn penalizes 1/C; ours maps it internally
+    ours = LogisticRegression(C=C, penalty="l2", tol=1e-10).fit(X, y)
+    # sklearn's default penalty is already l2; naming it triggers a FutureWarning
+    # on newer versions, so rely on the default here.
+    theirs = sklm.LogisticRegression(C=C, solver="lbfgs", tol=1e-10, max_iter=100000).fit(X, y)
+
+    np.testing.assert_allclose(ours.coef_.ravel(), theirs.coef_.ravel(), rtol=2e-3, atol=2e-3)
+    np.testing.assert_allclose(ours.intercept_, theirs.intercept_.ravel(), rtol=2e-3, atol=2e-3)

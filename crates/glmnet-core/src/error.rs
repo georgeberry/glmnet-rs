@@ -10,6 +10,11 @@ pub enum FitError {
     /// Not a glmnet `jerr`: R rejects these in `glmnet()` before reaching C++.
     PositiveLowerLimit,
     NegativeUpperLimit,
+    /// jerr = 8001. A (binomial) class probability underflowed `pmin` at the
+    /// null model -- effectively all responses are one class.
+    ProbMinReached,
+    /// jerr = 9001. A class probability exceeded `1 - pmin` at the null model.
+    ProbMaxReached,
 }
 
 /// Conditions that truncate the lambda path but still return the lambdas
@@ -28,6 +33,9 @@ impl FitError {
             FitError::AllExcluded => 7777,
             FitError::NonPositivePenalty => 10000,
             FitError::PositiveLowerLimit | FitError::NegativeUpperLimit => 0,
+            // glmnetpp reports these as 8001+m / 9001+m; at the null model m = 0.
+            FitError::ProbMinReached => 8001,
+            FitError::ProbMaxReached => 9001,
         }
     }
 }
@@ -50,6 +58,18 @@ impl std::fmt::Display for FitError {
             FitError::NonPositivePenalty => write!(f, "all penalty factors are <= 0 (jerr 10000)"),
             FitError::PositiveLowerLimit => write!(f, "lower limits should be non-positive"),
             FitError::NegativeUpperLimit => write!(f, "upper limits should be non-negative"),
+            FitError::ProbMinReached => {
+                write!(
+                    f,
+                    "null probability underflowed pmin; response is ~constant (jerr 8001)"
+                )
+            }
+            FitError::ProbMaxReached => {
+                write!(
+                    f,
+                    "null probability exceeded 1-pmin; response is ~constant (jerr 9001)"
+                )
+            }
         }
     }
 }

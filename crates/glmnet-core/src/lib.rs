@@ -7,12 +7,15 @@
 //! Terminology follows glmnet, not scikit-learn: `alpha` is the elastic-net
 //! mixing parameter and `lambda` is the penalty strength.
 
+pub mod binomial;
 pub mod control;
 pub mod error;
 pub mod gaussian;
+pub(crate) mod kernel;
 pub mod matrix;
 pub mod standardize;
 
+pub use binomial::{lognet, BinomialFit};
 pub use control::{Control, FitConfig};
 pub use error::{FitError, PathWarning};
 pub use gaussian::{elnet_naive, GaussianFit};

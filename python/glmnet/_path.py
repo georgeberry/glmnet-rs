@@ -69,6 +69,7 @@ class GlmnetPath:
     nulldev: float
     npasses: int
     alpha: float
+    family: str = "gaussian"
     warning: tuple | None = None
 
     @property
@@ -97,11 +98,25 @@ class GlmnetPath:
         full = np.vstack([self.a0, self.beta])
         return full[:, left] * frac + full[:, right] * (1.0 - frac)
 
-    def predict(self, X, s=None):
-        """Linear predictor. Returns `(n, len(s))`, or `(n, lmu)` when `s is None`."""
+    def predict(self, X, s=None, type="link"):
+        """Predictions. Returns `(n, len(s))`, or `(n, lmu)` when `s is None`.
+
+        `type="link"` returns the linear predictor. For `family="binomial"`,
+        `type="response"` returns the class-1 probability (the logistic of the
+        link) and `type="class"` returns the 0/1 label at a 0.5 threshold.
+        """
         X = np.ascontiguousarray(X, dtype=float)
         c = self.coef(s)
-        return X @ c[1:] + c[0]
+        eta = X @ c[1:] + c[0]
+        if type == "link":
+            return eta
+        if self.family != "binomial":
+            raise ValueError(f"type={type!r} is only defined for family='binomial'")
+        if type == "response":
+            return 1.0 / (1.0 + np.exp(-eta))
+        if type == "class":
+            return (eta > 0).astype(float)
+        raise ValueError(f"unknown predict type {type!r}")
 
     def __repr__(self) -> str:
         w = f", warning={self.warning[0]}" if self.warning else ""
@@ -116,6 +131,7 @@ def glmnet(
     x,
     y,
     *,
+    family: str = "gaussian",
     alpha: float = 1.0,
     nlambda: int = 100,
     lambda_min_ratio: float | None = None,
@@ -132,13 +148,25 @@ def glmnet(
     weights=None,
     exclude=None,
 ) -> GlmnetPath:
-    """Fit the Gaussian elastic-net path. Mirrors R's `glmnet(family="gaussian")`.
+    """Fit an elastic-net path. Mirrors R's `glmnet`.
 
+    `family` is `"gaussian"` (least squares) or `"binomial"` (two-class
+    logistic); for binomial, `y` must be 0/1 (or observed proportions).
     `alpha=1` is the lasso, `alpha=0` is ridge. `lambda_` overrides the
     automatically-generated grid.
     """
+    if family not in ("gaussian", "binomial"):
+        raise ValueError(f"family {family!r} not supported (yet); use 'gaussian' or 'binomial'")
+
     x = np.ascontiguousarray(x, dtype=float)
     y = np.ascontiguousarray(y, dtype=float).ravel()
+
+    if family == "binomial":
+        uniq = np.unique(y)
+        if not np.all((y >= 0) & (y <= 1)):
+            raise ValueError("binomial y must be 0/1 or in [0, 1]")
+        if uniq.size < 2:
+            raise ValueError("binomial y has only one class")
 
     def _vec(v, name):
         if v is None:
@@ -150,9 +178,10 @@ def glmnet(
             raise ValueError(f"{name} must have length 1 or {x.shape[1]}")
         return [float(t) for t in arr]
 
-    res = _core.elnet_gaussian(
+    res = _core.elnet_path(
         x,
         y,
+        family=family,
         alpha=float(alpha),
         nlambda=int(nlambda),
         lambda_min_ratio=lambda_min_ratio,
@@ -178,5 +207,6 @@ def glmnet(
         nulldev=res["nulldev"],
         npasses=res["npasses"],
         alpha=float(alpha),
+        family=family,
         warning=res["warning"],
     )

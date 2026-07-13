@@ -3,24 +3,28 @@
 //! `coef(s=...)`, the scikit-learn estimators) live in the Python package, where
 //! they are far easier to iterate on.
 
-use glmnet_core::{elnet_naive, Control, FitConfig};
+use glmnet_core::{elnet_naive, lognet, Control, FitConfig};
 use numpy::{IntoPyArray, PyArray2, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
+/// The common shape of every family's fit, so packing is written once.
+struct CommonFit {
+    lmu: usize,
+    lambda: Vec<f64>,
+    a0: Vec<f64>,
+    beta: Vec<f64>,
+    dev_ratio: Vec<f64>,
+    nulldev: f64,
+    npasses: usize,
+    warning: Option<(String, i32)>,
+}
+
 #[allow(clippy::too_many_arguments)]
-#[pyfunction]
-#[pyo3(signature = (
-    x, y, *, alpha=1.0, nlambda=100, lambda_min_ratio=None, user_lambda=None,
-    standardize=true, intercept=true, thresh=1e-7, maxit=100_000,
-    dfmax=None, pmax=None, penalty_factor=None, lower_limits=None,
-    upper_limits=None, weights=None, exclude=None,
-))]
-fn elnet_gaussian<'py>(
-    py: Python<'py>,
-    x: PyReadonlyArray2<'py, f64>,
-    y: PyReadonlyArray1<'py, f64>,
+fn build_config(
+    n: usize,
+    p: usize,
     alpha: f64,
     nlambda: usize,
     lambda_min_ratio: Option<f64>,
@@ -36,24 +40,7 @@ fn elnet_gaussian<'py>(
     upper_limits: Option<Vec<f64>>,
     weights: Option<Vec<f64>>,
     exclude: Option<Vec<usize>>,
-) -> PyResult<Bound<'py, PyDict>> {
-    let xr = x.as_array();
-    let (n, p) = (xr.nrows(), xr.ncols());
-    if y.len()? != n {
-        return Err(PyValueError::new_err(format!(
-            "x has {n} rows but y has length {}",
-            y.len()?
-        )));
-    }
-
-    // The core wants column-major; numpy hands us C order by default.
-    let mut xcm = Vec::with_capacity(n * p);
-    for j in 0..p {
-        for i in 0..n {
-            xcm.push(xr[[i, j]]);
-        }
-    }
-
+) -> FitConfig {
     let mut cfg = FitConfig::new(n, p);
     cfg.alpha = alpha;
     cfg.nlambda = nlambda;
@@ -76,11 +63,23 @@ fn elnet_gaussian<'py>(
     cfg.weights = weights;
     cfg.exclude = exclude.unwrap_or_default();
     cfg.control = Control::default();
+    cfg
+}
 
-    let yv = y.as_slice()?.to_vec();
-    let fit =
-        elnet_naive(&xcm, &yv, n, p, &cfg).map_err(|e| PyValueError::new_err(e.to_string()))?;
+/// numpy hands us C-order (row-major); the core wants column-major.
+fn to_col_major(x: &PyReadonlyArray2<'_, f64>) -> (Vec<f64>, usize, usize) {
+    let xr = x.as_array();
+    let (n, p) = (xr.nrows(), xr.ncols());
+    let mut xcm = Vec::with_capacity(n * p);
+    for j in 0..p {
+        for i in 0..n {
+            xcm.push(xr[[i, j]]);
+        }
+    }
+    (xcm, n, p)
+}
 
+fn pack<'py>(py: Python<'py>, p: usize, fit: CommonFit) -> PyResult<Bound<'py, PyDict>> {
     // beta comes back p x lmu column-major; hand numpy a (p, lmu) array.
     let rows: Vec<Vec<f64>> = (0..p)
         .map(|j| (0..fit.lmu).map(|k| fit.beta[k * p + j]).collect())
@@ -95,12 +94,105 @@ fn elnet_gaussian<'py>(
     out.set_item("dev_ratio", fit.dev_ratio.into_pyarray(py))?;
     out.set_item("nulldev", fit.nulldev)?;
     out.set_item("npasses", fit.npasses)?;
-    out.set_item("warning", fit.warning.map(|w| (format!("{w:?}"), w.jerr())))?;
+    out.set_item("warning", fit.warning)?;
     Ok(out)
+}
+
+#[allow(clippy::too_many_arguments)]
+#[pyfunction]
+#[pyo3(signature = (
+    x, y, *, family="gaussian", alpha=1.0, nlambda=100, lambda_min_ratio=None,
+    user_lambda=None, standardize=true, intercept=true, thresh=1e-7, maxit=100_000,
+    dfmax=None, pmax=None, penalty_factor=None, lower_limits=None,
+    upper_limits=None, weights=None, exclude=None,
+))]
+fn elnet_path<'py>(
+    py: Python<'py>,
+    x: PyReadonlyArray2<'py, f64>,
+    y: PyReadonlyArray1<'py, f64>,
+    family: &str,
+    alpha: f64,
+    nlambda: usize,
+    lambda_min_ratio: Option<f64>,
+    user_lambda: Option<Vec<f64>>,
+    standardize: bool,
+    intercept: bool,
+    thresh: f64,
+    maxit: usize,
+    dfmax: Option<usize>,
+    pmax: Option<usize>,
+    penalty_factor: Option<Vec<f64>>,
+    lower_limits: Option<Vec<f64>>,
+    upper_limits: Option<Vec<f64>>,
+    weights: Option<Vec<f64>>,
+    exclude: Option<Vec<usize>>,
+) -> PyResult<Bound<'py, PyDict>> {
+    let (xcm, n, p) = to_col_major(&x);
+    if y.len()? != n {
+        return Err(PyValueError::new_err(format!(
+            "x has {n} rows but y has length {}",
+            y.len()?
+        )));
+    }
+    let yv = y.as_slice()?.to_vec();
+
+    let cfg = build_config(
+        n,
+        p,
+        alpha,
+        nlambda,
+        lambda_min_ratio,
+        user_lambda,
+        standardize,
+        intercept,
+        thresh,
+        maxit,
+        dfmax,
+        pmax,
+        penalty_factor,
+        lower_limits,
+        upper_limits,
+        weights,
+        exclude,
+    );
+
+    let fit = match family {
+        "gaussian" => elnet_naive(&xcm, &yv, n, p, &cfg)
+            .map(|f| CommonFit {
+                lmu: f.lmu,
+                lambda: f.lambda,
+                a0: f.a0,
+                beta: f.beta,
+                dev_ratio: f.dev_ratio,
+                nulldev: f.nulldev,
+                npasses: f.npasses,
+                warning: f.warning.map(|w| (format!("{w:?}"), w.jerr())),
+            })
+            .map_err(|e| PyValueError::new_err(e.to_string()))?,
+        "binomial" => lognet(&xcm, &yv, n, p, &cfg)
+            .map(|f| CommonFit {
+                lmu: f.lmu,
+                lambda: f.lambda,
+                a0: f.a0,
+                beta: f.beta,
+                dev_ratio: f.dev_ratio,
+                nulldev: f.nulldev,
+                npasses: f.npasses,
+                warning: f.warning.map(|w| (format!("{w:?}"), w.jerr())),
+            })
+            .map_err(|e| PyValueError::new_err(e.to_string()))?,
+        other => {
+            return Err(PyValueError::new_err(format!(
+                "unknown family {other:?}; expected 'gaussian' or 'binomial'"
+            )))
+        }
+    };
+
+    pack(py, p, fit)
 }
 
 #[pymodule]
 fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_function(wrap_pyfunction!(elnet_gaussian, m)?)?;
+    m.add_function(wrap_pyfunction!(elnet_path, m)?)?;
     Ok(())
 }

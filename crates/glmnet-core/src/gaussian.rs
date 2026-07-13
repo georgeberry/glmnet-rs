@@ -143,16 +143,16 @@ impl<'a, M: DesignMatrix> Point<'a, M> {
     #[inline]
     fn update_beta(&mut self, k: usize, ab: f64, dem: f64, gk: f64) {
         self.gk_cache = gk;
-        let a_old = self.a[k];
-        let u = gk + a_old * self.xv[k];
-        let v = u.abs() - self.vp[k] * ab;
-        self.a[k] = 0.0;
-        if v > 0.0 {
-            let cand = v.copysign(u) / (self.xv[k] + self.vp[k] * dem);
-            // max(lo, min(hi, cand)) -- deliberately not f64::clamp, which panics
-            // when lo > hi. glmnet lets lo win in that case.
-            self.a[k] = cand.min(self.cl_hi[k]).max(self.cl_lo[k]);
-        }
+        self.a[k] = crate::kernel::soft_threshold(
+            self.a[k],
+            gk,
+            self.xv[k],
+            self.vp[k],
+            self.cl_lo[k],
+            self.cl_hi[k],
+            ab,
+            dem,
+        );
     }
 
     fn push_active(&mut self, k: usize) -> Result<(), PointErr> {

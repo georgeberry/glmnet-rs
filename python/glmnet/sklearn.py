@@ -43,13 +43,13 @@ import numpy as np
 from ._path import glmnet
 
 try:
-    from sklearn.base import BaseEstimator, RegressorMixin
+    from sklearn.base import BaseEstimator, ClassifierMixin, RegressorMixin
 except ImportError as exc:  # pragma: no cover
     raise ImportError(
         "glmnet.sklearn requires scikit-learn: pip install 'glmnet-rs[sklearn]'"
     ) from exc
 
-__all__ = ["ElasticNet", "Lasso"]
+__all__ = ["ElasticNet", "Lasso", "LogisticRegression"]
 
 
 def _y_scale(y, weights, fit_intercept):
@@ -163,3 +163,97 @@ class Lasso(ElasticNet):
             tol=tol,
             positive=positive,
         )
+
+
+class LogisticRegression(ClassifierMixin, BaseEstimator):
+    """Binary logistic regression with scikit-learn's parameterization.
+
+    scikit-learn minimizes ``C * sum_i NLL_i + penalty(w)`` (the penalty is
+    ``(1/2)||w||^2`` for l2, ``||w||_1`` for l1). glmnet minimizes the *averaged*
+    negative log-likelihood ``(1/N) sum_i NLL_i + lambda * [alpha||b||_1 +
+    (1-alpha)/2 ||b||_2^2]``. Because logistic regression does not standardize
+    ``y``, there is no ``ys`` factor here (unlike :class:`ElasticNet`), and the
+    two objectives coincide under::
+
+        lambda = 1 / (C * N)        # N = number of observations (sum of weights)
+        alpha  = l1_ratio           # penalty="l2" -> 0, "l1" -> 1
+
+    Only two classes are supported. `standardize` defaults to False to match
+    scikit-learn (which fits on the raw design matrix).
+    """
+
+    def __init__(
+        self,
+        C: float = 1.0,
+        *,
+        penalty: str = "l2",
+        l1_ratio: float | None = None,
+        fit_intercept: bool = True,
+        standardize: bool = False,
+        max_iter: int = 100_000,
+        tol: float = 1e-7,
+    ):
+        self.C = C
+        self.penalty = penalty
+        self.l1_ratio = l1_ratio
+        self.fit_intercept = fit_intercept
+        self.standardize = standardize
+        self.max_iter = max_iter
+        self.tol = tol
+
+    def _alpha(self) -> float:
+        if self.penalty == "l2":
+            return 0.0
+        if self.penalty == "l1":
+            return 1.0
+        if self.penalty == "elasticnet":
+            if self.l1_ratio is None:
+                raise ValueError("penalty='elasticnet' requires l1_ratio")
+            return float(self.l1_ratio)
+        raise ValueError(f"unknown penalty {self.penalty!r}")
+
+    def fit(self, X, y, sample_weight=None):
+        X = np.asarray(X, dtype=float)
+        y = np.asarray(y).ravel()
+
+        self.classes_ = np.unique(y)
+        if self.classes_.size != 2:
+            raise ValueError("LogisticRegression supports exactly two classes")
+        # Map the larger label to 1, matching sklearn's positive-class convention.
+        y01 = (y == self.classes_[1]).astype(float)
+
+        w = np.ones(len(y)) if sample_weight is None else np.asarray(sample_weight, dtype=float)
+        n_eff = w.sum()
+        if self.C <= 0:
+            raise ValueError("C must be > 0")
+        lam = 1.0 / (self.C * n_eff)
+
+        self.path_ = glmnet(
+            X,
+            y01,
+            family="binomial",
+            alpha=self._alpha(),
+            lambda_=[lam],
+            standardize=self.standardize,
+            intercept=self.fit_intercept,
+            thresh=self.tol,
+            maxit=self.max_iter,
+            weights=sample_weight,
+        )
+        self.coef_ = self.path_.beta[:, 0].reshape(1, -1)
+        self.intercept_ = np.atleast_1d(float(self.path_.a0[0]))
+        self.n_features_in_ = X.shape[1]
+        self.n_iter_ = self.path_.npasses
+        return self
+
+    def decision_function(self, X):
+        X = np.asarray(X, dtype=float)
+        return X @ self.coef_.ravel() + self.intercept_[0]
+
+    def predict_proba(self, X):
+        p1 = 1.0 / (1.0 + np.exp(-self.decision_function(X)))
+        return np.column_stack([1.0 - p1, p1])
+
+    def predict(self, X):
+        idx = (self.decision_function(X) > 0).astype(int)
+        return self.classes_[idx]

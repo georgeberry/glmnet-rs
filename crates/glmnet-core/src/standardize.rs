@@ -137,6 +137,70 @@ pub fn standardize_naive(
     Standardization { xm, xs, ym, ys, xv }
 }
 
+/// Weighted standardization for the GLM families (glmnetpp `LStandardize1`).
+///
+/// Unlike the Gaussian path, `X` is only **centered** (and optionally scaled),
+/// never pre-multiplied by `sqrt(w)`, and `y` is left untouched. The observation
+/// weights instead enter the solver through the IRLS working weights. `w` must
+/// already be normalized to sum to 1.
+///
+/// Returns `(xm, xs)`: weighted means and scales. Column variances are not
+/// returned because the GLM solvers recompute them from the IRLS weights every
+/// outer iteration.
+pub fn standardize_lognet(
+    x: &mut Dense,
+    w: &[f64],
+    isd: bool,
+    intr: bool,
+    ju: &[bool],
+) -> (Vec<f64>, Vec<f64>) {
+    let p = x.ncols();
+    let mut xm = vec![0.0; p];
+    let mut xs = vec![1.0; p];
+
+    for j in 0..p {
+        if !ju[j] {
+            continue;
+        }
+        if intr {
+            xm[j] = dot(x.col(j), w);
+            let m = xm[j];
+            for e in x.col_mut(j) {
+                *e -= m;
+            }
+            if isd {
+                let var = w
+                    .iter()
+                    .zip(x.col(j))
+                    .map(|(wi, xi)| wi * xi * xi)
+                    .sum::<f64>();
+                xs[j] = var.sqrt();
+                let s = xs[j];
+                for e in x.col_mut(j) {
+                    *e /= s;
+                }
+            }
+        } else {
+            xm[j] = 0.0;
+            if isd {
+                let mean = dot(x.col(j), w);
+                let ex2 = w
+                    .iter()
+                    .zip(x.col(j))
+                    .map(|(wi, xi)| wi * xi * xi)
+                    .sum::<f64>();
+                xs[j] = (ex2 - mean * mean).sqrt();
+                let s = xs[j];
+                for e in x.col_mut(j) {
+                    *e /= s;
+                }
+            }
+        }
+    }
+
+    (xm, xs)
+}
+
 #[inline]
 fn dot(a: &[f64], b: &[f64]) -> f64 {
     let mut acc = 0.0;

@@ -35,8 +35,9 @@ Two things make this a strong oracle rather than a smoke test:
 - **`lmu` (path length) is compared.** It is data-dependent (see `fdev` below),
   so a mismatch localizes the bug to control flow rather than arithmetic.
 
-Current status: 22/22 fixtures, max relative error ~1e-15, `npasses` identical
-on every case.
+Current status: 42/42 fixtures (22 Gaussian + 20 binomial), max relative error
+~1e-14, `npasses` identical to R on every case. `bin_*` fixtures are binomial;
+the Rust parity harness dispatches on that prefix.
 
 Two traps when generating fixtures:
 
@@ -124,28 +125,82 @@ Pure lasso hides the bug, which is precisely why it is dangerous.
 - `jerr` conventions (`util/exceptions.hpp`): `-m-1` = maxit at lambda `m`;
   `-10001-m` = `pmax` exceeded; `7777` = all predictors constant/excluded.
 
-## Numerical fidelity
+## Numerical fidelity and performance
 
-`Dense::dot` is a plain scalar loop, matching Eigen's summation order for
-un-vectorized columns. Replacing it with a chunked or SIMD reduction changes the
-floating-point summation order, which perturbs `dlx` and can change `npasses`.
-That is *allowed* (the answer stays correct), but it will break the exact
-`npasses` comparison. If you vectorize, relax that assertion deliberately and
-say so — do not silently loosen it.
+Inner products go through `matrix::dot4` / `wdot4`, which use four partial
+accumulators so LLVM can vectorize the reduction. A strict left-fold
+(`acc += a[i]*b[i]`) has a loop-carried dependency Rust will not reassociate, so
+it never vectorizes; four accumulators roughly **halve** whole-path solve time on
+the larger problems (see `scripts/bench.py`).
+
+The four-accumulator sum is reassociated, so it differs from a strict left-fold
+at ~1e-15. This is *not* a fidelity regression, and the reasoning matters:
+glmnetpp is built on Eigen, whose dot product is itself SIMD-reassociated, so a
+strict scalar fold never reproduced glmnet's exact summation order either. What
+the port holds to is the parity *test* — exact `npasses` and coefficients to
+1e-12 against R — which `dot4` passes on all 42 fixtures. The convergence and
+`fdev` thresholds have enough margin that a ~1e-15 summation difference does not
+flip a decision on these problems. That robustness is *empirical*, not
+guaranteed: an adversarial dataset sitting exactly on an `fdev` boundary could in
+principle land a lambda differently. If you change the reduction again, re-run
+the parity suite; do not assume bit-stability.
+
+Current speed (Apple Silicon, full path, vs R glmnet on identical data): Gaussian
+~0.6–0.85x of R, binomial ~0.7–1.1x (faster than R on tall/`n >> p`). The
+remaining gap is mostly Eigen's more mature short-vector and cache handling; the
+`p >> n` ("wide") case is the weakest because dots are short and the KKT sweep is
+over many columns. Data marshaling (numpy C-order → column-major) was measured to
+be negligible: pure-core timings (`examples/bench_core.rs`) match the Python
+numbers.
+
+## Binomial (two-class logistic) — done
+
+`binomial.rs` ports `ElnetPath<binomial,two_class>` for dense `X`, exact-Hessian
+Newton (`kopt = 0`, R's default `type.logistic = "Newton"`), no offset. The
+IRLS-over-WLS loop it introduces is the architectural unlock that Poisson, Cox
+and multinomial all reuse. What differs from Gaussian:
+
+- **`X` is centered but not `sqrt(w)`-scaled**, and `y` is not rescaled. Weights
+  enter through the IRLS working weights `v = w*q*(1-q)`, so the weight appears
+  explicitly in the gradient `<x_k, w*(y-q)>` and variance `sum_i v_i x_ij^2`.
+  This is exactly the seam the sparse `sp_*` solvers exist for.
+- **IRLS/WLS control flow.** Outer IRLS freezes `v` and the column variance `xv`,
+  runs coordinate descent to convergence (inner WLS), then recomputes `q,v,r` and
+  tests convergence (coefficients stable vs the pre-WLS snapshot) plus the strong
+  KKT check. State warm-starts across lambdas; the iterate counts depend on it.
+- **The `fdev` test uses the *absolute* change in the deviance ratio**
+  (`dev(m) - dev(m-1)`), where Gaussian used the *relative* change in R^2. Same
+  constant, different quantity.
+- **Probability clamps.** The linear predictor is clamped to `±log(1/pmin - 1)`
+  so a separating hyperplane cannot drive coefficients to infinity, and the path
+  stops when the total working variance falls below `vmin = (1+pmin)pmin(1-pmin)`
+  — the logistic analogue of Gaussian saturation.
+- **Deviance bookkeeping.** `dev(m) = (dev_null - dev_current)/dev_null` with `p`
+  clamped into `[pmin, 1-pmin]` (glmnetpp `dev2`); reported `nulldev = 2*sw*dev0`.
+- The zero-bound `fdev` disable (quirk 3 above) applies here too — it bit the
+  non-negative logistic (`bin_nonneg`) exactly as it did `lasso_lowerlimit0`.
+
+Point solver specialization: unlike Gaussian, binomial's `Point` is concrete over
+`Dense` rather than generic over `DesignMatrix`, because its weighted per-column
+operations don't reduce to the trait's `dot`/`axpy`. The right trait surface for
+those falls out of the sparse work; guessing it now would likely be wrong.
+
+The sklearn map for logistic is cleaner than for least squares — no `ys` factor,
+because logistic does not standardize `y`. `LogisticRegression(C, penalty)` sets
+`lambda = 1/(C*N)` and `alpha = l1_ratio` (`penalty="l2"` -> 0, `"l1"` -> 1).
 
 ## What's next
 
-The Gaussian naive path is done and verified. In rough order of value:
+In rough order of value:
 
-1. **`gaussian_cov`** — the default solver for `nvars < 500`. Shares the driver;
+1. **`poisson`** (`fishnet`) — reuses the IRLS loop already built here; smallest
+   next step. Log-link, watch the `exmx` exponent clamp.
+2. **`gaussian_cov`** — the default solver for `nvars < 500`. Shares the driver;
    different point solver (maintains a gradient/covariance cache, no strong rule).
-2. **`binomial`** — introduces the IRLS-over-WLS loop
-   (`ElnetPointNonLinearCRTPBase::irls`). This is the architectural unlock: cox,
-   poisson and multinomial all reuse that loop. Watch `pmin`/`exmx` clamps.
-3. **`poisson`** — reuses the IRLS loop.
-4. **Sparse (CSC)** — `matrix.rs::DesignMatrix` already isolates the two
-   operations that need the `xm`/`xs` correction. Sparse `X` is never centered
-   (that would destroy sparsity), so the correction is applied per gradient and
-   per residual update. This is why upstream carries a parallel `sp_*` solver for
-   every family; here it should be one more `impl DesignMatrix`.
+3. **Sparse (CSC)** — `matrix.rs::DesignMatrix` isolates the operations that need
+   the `xm`/`xs` correction. Sparse `X` is never centered (that would destroy
+   sparsity), so the correction is applied per gradient and per residual update.
+   Generalize binomial's `Point` off `Dense` as part of this.
+4. **`multinomial` / `cox`** — both reuse the IRLS loop; cox needs risk-set
+   gradient machinery.
 5. **`cv.glmnet`** — pure Python, on top of the path object.

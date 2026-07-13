@@ -1,8 +1,18 @@
 //! Parity against R glmnet 5.0. Regenerate fixtures with `Rscript scripts/gen_fixtures.R`.
 
-use glmnet_core::{elnet_naive, Control, FitConfig};
+use glmnet_core::{elnet_naive, lognet, Control, FitConfig};
 use serde::{Deserialize, Deserializer};
 use std::path::PathBuf;
+
+/// The subset of a fit compared against R. Both families expose these fields.
+struct Solved {
+    lmu: usize,
+    lambda: Vec<f64>,
+    a0: Vec<f64>,
+    beta: Vec<f64>,
+    dev_ratio: Vec<f64>,
+    npasses: usize,
+}
 
 /// jsonlite emits non-finite doubles as JSON strings ("Inf", "-Inf", "NaN"),
 /// since JSON has no literal for them. Accept either form.
@@ -126,7 +136,27 @@ fn matches_r_glmnet() {
     let mut failures = Vec::new();
 
     for f in load_all() {
-        let fit = match elnet_naive(&f.x, &f.y, f.n, f.p, &cfg_of(&f)) {
+        // Fixture family is encoded in the filename prefix: `bin_*` is binomial.
+        let solved = if f.name.starts_with("bin_") {
+            lognet(&f.x, &f.y, f.n, f.p, &cfg_of(&f)).map(|fit| Solved {
+                lmu: fit.lmu,
+                lambda: fit.lambda,
+                a0: fit.a0,
+                beta: fit.beta,
+                dev_ratio: fit.dev_ratio,
+                npasses: fit.npasses,
+            })
+        } else {
+            elnet_naive(&f.x, &f.y, f.n, f.p, &cfg_of(&f)).map(|fit| Solved {
+                lmu: fit.lmu,
+                lambda: fit.lambda,
+                a0: fit.a0,
+                beta: fit.beta,
+                dev_ratio: fit.dev_ratio,
+                npasses: fit.npasses,
+            })
+        };
+        let fit = match solved {
             Ok(fit) => fit,
             Err(e) => {
                 failures.push(format!("{}: solver error {e}", f.name));
