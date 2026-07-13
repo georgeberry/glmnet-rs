@@ -1,0 +1,12 @@
+[package]
+name = "glmnet-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Pure-Rust port of glmnet's elastic-net coordinate-descent kernels"
+
+[dependencies]
+
+[dev-dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

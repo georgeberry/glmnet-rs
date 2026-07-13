@@ -1,0 +1,25 @@
+[build-system]
+requires = ["maturin>=1.7,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "glmnet-rs"
+requires-python = ">=3.9"
+description = "glmnet's elastic-net coordinate descent, ported to Rust"
+license = { text = "GPL-2.0-only" }
+classifiers = [
+  "Programming Language :: Rust",
+  "Programming Language :: Python :: Implementation :: CPython",
+]
+dependencies = ["numpy>=1.22"]
+dynamic = ["version"]
+
+[project.optional-dependencies]
+sklearn = ["scikit-learn>=1.0"]
+test = ["pytest", "scikit-learn>=1.0"]
+
+[tool.maturin]
+manifest-path = "crates/glmnet-py/Cargo.toml"
+module-name = "glmnet._core"
+python-source = "python"
+features = ["pyo3/extension-module"]
