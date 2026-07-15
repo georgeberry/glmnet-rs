@@ -344,7 +344,8 @@ impl<'a, M: GlmMatrix> Point<'a, M> {
         // handles dense vs sparse accumulation. Swap the scratch buffer out so we
         // can write it while reading self.mat; swapped back after (no allocation).
         let mut eta = std::mem::take(&mut self.eta);
-        self.mat.accumulate_eta(&self.ia, &self.b, self.b0, &mut eta);
+        self.mat
+            .accumulate_eta(&self.ia, &self.b, self.b0, &mut eta);
         for (qi, &fi) in self.q.iter_mut().zip(eta.iter()) {
             *qi = if fi < -self.fmax {
                 0.0
@@ -542,9 +543,7 @@ pub fn lognet(
     let (xm, xs) = standardize_lognet(&mut x, &w, cfg.standardize, cfg.intercept, &ju);
     let mat = DenseGlm::new(x);
 
-    run_path(
-        mat, y, &w, sw, &xm, &xs, &vp, cl_lo, cl_hi, &ju, cfg, ctl,
-    )
+    run_path(mat, y, &w, sw, &xm, &xs, &vp, cl_lo, cl_hi, &ju, cfg, ctl)
 }
 
 /// Fit the two-class logistic path for a **sparse** design matrix (CSC).
@@ -622,8 +621,16 @@ pub fn lognet_sparse(
         ctl.fdev = 0.0;
     }
 
-    let (xm, xs) =
-        standardize_lognet_sparse(col_ptr, row_idx, values, &w, p, cfg.standardize, cfg.intercept, &ju);
+    let (xm, xs) = standardize_lognet_sparse(
+        col_ptr,
+        row_idx,
+        values,
+        &w,
+        p,
+        cfg.standardize,
+        cfg.intercept,
+        &ju,
+    );
     let mat = new_sparse_glm(
         n,
         p,
@@ -634,9 +641,7 @@ pub fn lognet_sparse(
         xs.clone(),
     );
 
-    run_path(
-        mat, y, &w, sw, &xm, &xs, &vp, cl_lo, cl_hi, &ju, cfg, ctl,
-    )
+    run_path(mat, y, &w, sw, &xm, &xs, &vp, cl_lo, cl_hi, &ju, cfg, ctl)
 }
 
 /// Shared lambda path for the logistic solver, generic over dense/sparse.

@@ -154,6 +154,13 @@ class CVGlmnet:
             )
         return "\n".join(rows)
 
+    def plot(self, ax=None):
+        """Plot the CV curve with error bars and min/1se lines (matplotlib), as
+        R's ``plot.cv.glmnet``. Returns the ``Axes``."""
+        from .plot import plot_cv
+
+        return plot_cv(self, ax=ax)
+
     def to_frame(self):
         """Per-lambda CV curve as a pandas ``DataFrame`` (requires pandas)."""
         import pandas as pd

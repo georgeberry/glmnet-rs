@@ -16,7 +16,8 @@ dynamic = ["version"]
 
 [project.optional-dependencies]
 sklearn = ["scikit-learn>=1.0"]
-test = ["pytest", "scikit-learn>=1.0"]
+plot = ["matplotlib>=3.4"]
+test = ["pytest", "scikit-learn>=1.0", "matplotlib>=3.4"]
 
 [tool.maturin]
 manifest-path = "crates/glmnet-py/Cargo.toml"

@@ -138,6 +138,16 @@ class GlmnetPath:
             )
         return "\n".join(rows)
 
+    def plot(self, xvar="norm", label=False, ax=None):
+        """Plot the coefficient paths (matplotlib), as R's ``plot.glmnet``.
+
+        `xvar` is ``"norm"`` (L1 norm, default), ``"lambda"`` (``-log(lambda)``)
+        or ``"dev"`` (fraction of deviance explained). Returns the ``Axes``.
+        """
+        from .plot import plot_coef
+
+        return plot_coef(self, xvar=xvar, label=label, ax=ax)
+
     def to_frame(self):
         """The summary as a pandas ``DataFrame`` (requires pandas)."""
         import pandas as pd

@@ -93,7 +93,7 @@ fn load_all() -> Vec<Fixture> {
         // (cross-validation schema, a Python-only feature) use different shapes.
         .filter(|p| {
             let name = p.file_name().unwrap().to_str().unwrap();
-            !name.starts_with("sp_") && !name.starts_with("cv_")
+            !name.starts_with("sp") && !name.starts_with("cv_")
         })
         .collect();
     entries.sort();
@@ -411,6 +411,121 @@ fn sparse_matches_r_glmnet() {
         } else {
             println!(
                 "{:<22} lmu={:<4} max_rel_err={:.2e}  npasses {} vs {} (R)",
+                f.name, fit.lmu, worst, fit.npasses, f.npasses
+            );
+        }
+    }
+    assert!(failures.is_empty(), "\n{}", failures.join("\n"));
+}
+
+// ---------------------------------------------------------------------------
+// Sparse binomial / poisson against R's sparse GLM path (splognet/spfishnet).
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
+struct SparseGlmFixture {
+    name: String,
+    n: usize,
+    p: usize,
+    family: String,
+    col_ptr: Vec<usize>,
+    row_idx: Vec<usize>,
+    values: Vec<f64>,
+    y: Vec<f64>,
+    weights: Vec<f64>,
+    alpha: f64,
+    intercept: bool,
+    standardize: bool,
+    nlambda: usize,
+    lambda_min_ratio: f64,
+    user_lambda: Option<Vec<f64>>,
+    penalty_factor: Vec<f64>,
+    #[serde(deserialize_with = "loose_f64_vec")]
+    lower_limits: Vec<f64>,
+    #[serde(deserialize_with = "loose_f64_vec")]
+    upper_limits: Vec<f64>,
+    dfmax: usize,
+    pmax: usize,
+    thresh: f64,
+    maxit: usize,
+    lmu: usize,
+    lambda: Vec<f64>,
+    a0: Vec<f64>,
+    beta: Vec<f64>,
+    npasses: usize,
+}
+
+#[test]
+fn sparse_glm_matches_r() {
+    use glmnet_core::lognet_sparse;
+    const TOL: f64 = 1e-10;
+    let dir = fixture_dir();
+    let mut paths: Vec<_> = std::fs::read_dir(&dir)
+        .unwrap()
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .filter(|p| {
+            let n = p.file_name().unwrap().to_str().unwrap();
+            n.starts_with("spb_") || n.starts_with("spp_")
+        })
+        .collect();
+    paths.sort();
+    assert!(
+        !paths.is_empty(),
+        "no spb_/spp_ fixtures; run gen_fixtures_sparse_glm.R"
+    );
+
+    let mut failures = Vec::new();
+    for path in paths {
+        let f: SparseGlmFixture =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let cfg = FitConfig {
+            alpha: f.alpha,
+            nlambda: f.nlambda,
+            lambda_min_ratio: f.lambda_min_ratio,
+            user_lambda: f.user_lambda.clone(),
+            standardize: f.standardize,
+            intercept: f.intercept,
+            thresh: f.thresh,
+            maxit: f.maxit,
+            dfmax: f.dfmax,
+            pmax: f.pmax,
+            penalty_factor: Some(f.penalty_factor.clone()),
+            lower_limits: Some(f.lower_limits.clone()),
+            upper_limits: Some(f.upper_limits.clone()),
+            weights: Some(f.weights.clone()),
+            exclude: Vec::new(),
+            control: Control::default(),
+        };
+        // Poisson sparse not yet implemented; only test binomial for now.
+        if f.family != "binomial" {
+            continue;
+        }
+        let fit = match lognet_sparse(f.n, f.p, &f.col_ptr, &f.row_idx, &f.values, &f.y, &cfg) {
+            Ok(fit) => fit,
+            Err(e) => {
+                failures.push(format!("{}: solver error {e}", f.name));
+                continue;
+            }
+        };
+        if fit.lmu != f.lmu {
+            failures.push(format!("{}: lmu {} != {} (R)", f.name, fit.lmu, f.lmu));
+            continue;
+        }
+        let mut worst = 0.0f64;
+        for k in 0..f.lmu {
+            worst = worst.max(rel(fit.lambda[k], f.lambda[k]));
+            worst = worst.max(rel(fit.a0[k], f.a0[k]));
+            for j in 0..f.p {
+                worst = worst.max(rel(fit.beta[k * f.p + j], f.beta[k * f.p + j]));
+            }
+        }
+        if worst > TOL {
+            failures.push(format!("{}: max rel err {:.2e}", f.name, worst));
+        } else {
+            println!(
+                "{:<12} lmu={:<4} max_rel_err={:.2e}  npasses {} vs {} (R)",
                 f.name, fit.lmu, worst, fit.npasses, f.npasses
             );
         }

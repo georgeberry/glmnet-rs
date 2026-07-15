@@ -6,11 +6,14 @@ to Rust, with a Python front end.
 Ported from `glmnetpp` (the C++17 core of R glmnet >= 4.1), **not** the legacy
 Fortran, and validated against R glmnet 5.0.
 
-**Status:** Gaussian, two-class binomial (logistic), and Poisson (dense `X`,
-naive/Newton solvers), plus **sparse `X` for Gaussian** (CSC). 74 parity fixtures
-pass at ~1e-14 relative error with iteration counts (`npasses`) identical to R —
-the sparse ones validated against R's own sparse path. Multinomial, Cox, the
-covariance solver, and sparse GLM families are not implemented yet — see
+**Status:** Gaussian, two-class binomial (logistic), and Poisson (dense `X`),
+plus **sparse `X`** for Gaussian and binomial (CSC). Cross-validation, summaries,
+and R-style plots are implemented. ~90 parity fixtures pass at ~1e-14 relative
+error with iteration counts (`npasses`) identical to R — the sparse ones against
+R's own sparse path — and coefficients match R to ~1e-13 on real long/wide
+datasets (see [`datasets/`](datasets/)). What's still missing (multinomial, Cox,
+`relax`, offsets, sparse Poisson, …) is tracked in
+[`docs/ROADMAP.md`](docs/ROADMAP.md); porting notes are in
 [`docs/PORTING.md`](docs/PORTING.md).
 
 ## Layout
@@ -60,6 +63,10 @@ cv.predict(X, s="lambda.1se")
 print(path)        # Df / %Dev / Lambda table
 print(cv)          # lambda.min / lambda.1se with measure and SE
 path.to_frame()    # optional pandas DataFrame
+
+# plots, like R's plot.glmnet / plot.cv.glmnet (needs matplotlib)
+path.plot(xvar="lambda")   # coefficient paths, Df on the top axis
+cv.plot()                  # CV curve with error bars + min/1se lines
 ```
 
 scikit-learn compatible, using **scikit-learn's** meaning of `alpha`:
@@ -92,8 +99,10 @@ Rscript scripts/gen_fixtures.R             # regenerate Gaussian fixtures (needs
 Rscript scripts/gen_fixtures_binomial.R    # regenerate binomial fixtures
 Rscript scripts/gen_fixtures_poisson.R     # regenerate Poisson fixtures
 Rscript scripts/gen_fixtures_sparse.R      # regenerate sparse Gaussian fixtures (needs Matrix)
+Rscript scripts/gen_fixtures_sparse_glm.R  # regenerate sparse binomial/poisson fixtures
 
 python scripts/bench.py                    # wall-clock vs R glmnet on identical data
+python scripts/compare_datasets.py         # coefficients + timing vs R on real datasets
 cargo run --release -p glmnet-core --example bench_core   # pure-core timings
 ```
 

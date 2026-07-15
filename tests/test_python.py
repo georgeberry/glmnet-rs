@@ -13,11 +13,11 @@ import pytest
 
 from glmnet import glmnet, lambda_interp
 
-# `sp_*` (sparse CSC schema) and `cv_*` (cross-validation schema) fixtures are
-# covered by their own tests, not this dense-input parametrization.
+# `sp*` (sparse CSC schema: sp_/spb_/spp_) and `cv_*` (cross-validation schema)
+# fixtures are covered by their own tests, not this dense-input parametrization.
 FIXTURES = sorted(
     p for p in (pathlib.Path(__file__).parent / "fixtures").glob("*.json")
-    if not p.stem.startswith(("sp_", "cv_"))
+    if not p.stem.startswith(("sp", "cv_"))
 )
 
 
@@ -522,3 +522,64 @@ def test_to_frame_optional_pandas():
     frame = fit.to_frame()
     assert list(frame.columns) == ["Df", "pct_dev", "lambda"]
     assert len(frame) == fit.lmu
+
+
+# --- plotting --------------------------------------------------------------
+
+
+def _mpl_agg():
+    mpl = pytest.importorskip("matplotlib")
+    mpl.use("Agg")
+
+
+@pytest.mark.parametrize("xvar", ["norm", "lambda", "dev"])
+def test_path_plot_line_count(xvar):
+    _mpl_agg()
+    rng = np.random.default_rng(60)
+    X = rng.standard_normal((120, 8))
+    y = X[:, :3] @ np.array([2.0, -1.0, 1.5]) + rng.standard_normal(120)
+    fit = glmnet(X, y)
+    ax = fit.plot(xvar=xvar)
+    # one line per ever-nonzero coefficient.
+    n_nonzero = int(np.any(fit.beta != 0, axis=1).sum())
+    assert len(ax.get_lines()) == n_nonzero
+    assert ax.get_ylabel() == "Coefficients"
+
+
+def test_path_plot_xlabels():
+    _mpl_agg()
+    rng = np.random.default_rng(61)
+    X = rng.standard_normal((80, 5))
+    y = X[:, 0] * 2 + rng.standard_normal(80)
+    fit = glmnet(X, y)
+    assert fit.plot(xvar="norm").get_xlabel() == "L1 Norm"
+    assert fit.plot(xvar="lambda").get_xlabel() == "-Log(Lambda)"
+    assert fit.plot(xvar="dev").get_xlabel() == "Fraction Deviance Explained"
+    with pytest.raises(ValueError):
+        fit.plot(xvar="bogus")
+
+
+def test_cv_plot_has_min_1se_lines():
+    _mpl_agg()
+    from glmnet import cv_glmnet
+
+    rng = np.random.default_rng(62)
+    X = rng.standard_normal((150, 8))
+    y = X[:, :3] @ np.array([2.0, -1.0, 1.5]) + rng.standard_normal(150)
+    cv = cv_glmnet(X, y, seed=0)
+    ax = cv.plot()
+    # two vertical dashed lines (lambda.min, lambda.1se).
+    vlines = [ln for ln in ax.get_lines() if ln.get_linestyle() in (":", "dotted")]
+    assert len(vlines) == 2
+    assert ax.get_ylabel() == "Mean-Squared Error"
+
+
+def test_cv_plot_binomial_measure_label():
+    _mpl_agg()
+    from glmnet import cv_glmnet
+
+    rng = np.random.default_rng(63)
+    X = rng.standard_normal((200, 6))
+    y = (rng.random(200) < 1.0 / (1.0 + np.exp(-(X[:, :3] @ [1.5, -1, 1.2])))).astype(float)
+    cv = cv_glmnet(X, y, family="binomial", type_measure="deviance", seed=0)
+    assert cv.plot().get_ylabel() == "Deviance"
