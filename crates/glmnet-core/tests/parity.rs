@@ -89,6 +89,12 @@ fn load_all() -> Vec<Fixture> {
         .filter_map(Result::ok)
         .map(|e| e.path())
         .filter(|p| p.extension().is_some_and(|x| x == "json"))
+        // `sp_*` (CSC schema, loaded by sparse_matches_r_glmnet) and `cv_*`
+        // (cross-validation schema, a Python-only feature) use different shapes.
+        .filter(|p| {
+            let name = p.file_name().unwrap().to_str().unwrap();
+            !name.starts_with("sp_") && !name.starts_with("cv_")
+        })
         .collect();
     entries.sort();
     for path in entries {
@@ -216,5 +222,198 @@ fn matches_r_glmnet() {
         }
     }
 
+    assert!(failures.is_empty(), "\n{}", failures.join("\n"));
+}
+
+// ---------------------------------------------------------------------------
+// Sparse vs dense: the sparse CSC solver must reproduce the dense solver on the
+// same data (dense is already pinned to R). Uses the Gaussian fixtures, which
+// are mostly dense but exercise the full path machinery; a genuinely sparse
+// matrix is tested separately below.
+// ---------------------------------------------------------------------------
+
+fn to_csc(x: &[f64], n: usize, p: usize) -> (Vec<usize>, Vec<usize>, Vec<f64>) {
+    // x is column-major dense; keep only nonzeros.
+    let mut col_ptr = vec![0usize; p + 1];
+    let mut row_idx = Vec::new();
+    let mut values = Vec::new();
+    for j in 0..p {
+        for i in 0..n {
+            let v = x[j * n + i];
+            if v != 0.0 {
+                row_idx.push(i);
+                values.push(v);
+            }
+        }
+        col_ptr[j + 1] = values.len();
+    }
+    (col_ptr, row_idx, values)
+}
+
+#[test]
+fn sparse_matches_dense_on_gaussian_fixtures() {
+    use glmnet_core::elnet_naive_sparse;
+    const TOL: f64 = 1e-9;
+    let mut failures = Vec::new();
+
+    for f in load_all() {
+        if f.name.starts_with("bin_") || f.name.starts_with("pois_") {
+            continue; // sparse is Gaussian-only for now
+        }
+        let cfg = cfg_of(&f);
+        let dense = match elnet_naive(&f.x, &f.y, f.n, f.p, &cfg) {
+            Ok(d) => d,
+            Err(_) => continue,
+        };
+        let (col_ptr, row_idx, values) = to_csc(&f.x, f.n, f.p);
+        let sparse = match elnet_naive_sparse(f.n, f.p, &col_ptr, &row_idx, &values, &f.y, &cfg) {
+            Ok(s) => s,
+            Err(e) => {
+                failures.push(format!("{}: sparse solver error {e}", f.name));
+                continue;
+            }
+        };
+
+        if sparse.lmu != dense.lmu {
+            failures.push(format!(
+                "{}: sparse lmu {} != dense {}",
+                f.name, sparse.lmu, dense.lmu
+            ));
+            continue;
+        }
+        let mut worst = 0.0f64;
+        for k in 0..dense.lmu {
+            worst = worst.max(rel(sparse.lambda[k], dense.lambda[k]));
+            worst = worst.max(rel(sparse.a0[k], dense.a0[k]));
+            for j in 0..f.p {
+                worst = worst.max(rel(sparse.beta[k * f.p + j], dense.beta[k * f.p + j]));
+            }
+        }
+        if worst > TOL {
+            failures.push(format!(
+                "{}: sparse vs dense max rel err {:.2e}",
+                f.name, worst
+            ));
+        } else {
+            println!(
+                "{:<26} sparse==dense  max_rel_err={:.2e}  npasses {} vs {}",
+                f.name, worst, sparse.npasses, dense.npasses
+            );
+        }
+    }
+    assert!(failures.is_empty(), "\n{}", failures.join("\n"));
+}
+
+// ---------------------------------------------------------------------------
+// Genuinely sparse fixtures generated from R's spelnet (dgCMatrix input). This
+// pins the CSC solver directly to R, not just to our dense solver.
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
+struct SparseFixture {
+    name: String,
+    n: usize,
+    p: usize,
+    col_ptr: Vec<usize>,
+    row_idx: Vec<usize>,
+    values: Vec<f64>,
+    y: Vec<f64>,
+    weights: Vec<f64>,
+    alpha: f64,
+    intercept: bool,
+    standardize: bool,
+    nlambda: usize,
+    lambda_min_ratio: f64,
+    user_lambda: Option<Vec<f64>>,
+    penalty_factor: Vec<f64>,
+    #[serde(deserialize_with = "loose_f64_vec")]
+    lower_limits: Vec<f64>,
+    #[serde(deserialize_with = "loose_f64_vec")]
+    upper_limits: Vec<f64>,
+    dfmax: usize,
+    pmax: usize,
+    thresh: f64,
+    maxit: usize,
+    lmu: usize,
+    lambda: Vec<f64>,
+    a0: Vec<f64>,
+    beta: Vec<f64>,
+    npasses: usize,
+}
+
+#[test]
+fn sparse_matches_r_glmnet() {
+    use glmnet_core::elnet_naive_sparse;
+    const TOL: f64 = 1e-11;
+    let dir = fixture_dir();
+    let mut paths: Vec<_> = std::fs::read_dir(&dir)
+        .unwrap()
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .filter(|p| p.file_name().unwrap().to_str().unwrap().starts_with("sp_"))
+        .collect();
+    paths.sort();
+    assert!(
+        !paths.is_empty(),
+        "no sp_* fixtures; run scripts/gen_fixtures_sparse.R"
+    );
+
+    let mut failures = Vec::new();
+    for path in paths {
+        let f: SparseFixture = serde_json::from_str(&std::fs::read_to_string(&path).unwrap())
+            .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+
+        let cfg = FitConfig {
+            alpha: f.alpha,
+            nlambda: f.nlambda,
+            lambda_min_ratio: f.lambda_min_ratio,
+            user_lambda: f.user_lambda.clone(),
+            standardize: f.standardize,
+            intercept: f.intercept,
+            thresh: f.thresh,
+            maxit: f.maxit,
+            dfmax: f.dfmax,
+            pmax: f.pmax,
+            penalty_factor: Some(f.penalty_factor.clone()),
+            lower_limits: Some(f.lower_limits.clone()),
+            upper_limits: Some(f.upper_limits.clone()),
+            weights: Some(f.weights.clone()),
+            exclude: Vec::new(),
+            control: Control::default(),
+        };
+
+        let fit = match elnet_naive_sparse(f.n, f.p, &f.col_ptr, &f.row_idx, &f.values, &f.y, &cfg)
+        {
+            Ok(fit) => fit,
+            Err(e) => {
+                failures.push(format!("{}: solver error {e}", f.name));
+                continue;
+            }
+        };
+        if fit.lmu != f.lmu {
+            failures.push(format!("{}: lmu {} != {} (R)", f.name, fit.lmu, f.lmu));
+            continue;
+        }
+        let mut worst = 0.0f64;
+        for k in 0..f.lmu {
+            worst = worst.max(rel(fit.lambda[k], f.lambda[k]));
+            worst = worst.max(rel(fit.a0[k], f.a0[k]));
+            for j in 0..f.p {
+                worst = worst.max(rel(fit.beta[k * f.p + j], f.beta[k * f.p + j]));
+            }
+        }
+        if worst > TOL {
+            failures.push(format!(
+                "{}: max rel err {:.2e} (tol {:.0e})",
+                f.name, worst, TOL
+            ));
+        } else {
+            println!(
+                "{:<22} lmu={:<4} max_rel_err={:.2e}  npasses {} vs {} (R)",
+                f.name, fit.lmu, worst, fit.npasses, f.npasses
+            );
+        }
+    }
     assert!(failures.is_empty(), "\n{}", failures.join("\n"));
 }

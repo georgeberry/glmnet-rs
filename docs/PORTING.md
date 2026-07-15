@@ -35,10 +35,13 @@ Two things make this a strong oracle rather than a smoke test:
 - **`lmu` (path length) is compared.** It is data-dependent (see `fdev` below),
   so a mismatch localizes the bug to control flow rather than arithmetic.
 
-Current status: 62/62 fixtures (22 Gaussian + 20 binomial + 20 Poisson), max
-relative error ~1e-14, `npasses` identical to R on every case. Fixture family is
-encoded in the filename prefix (`bin_*` binomial, `pois_*` Poisson, else
-Gaussian); the Rust parity harness dispatches on it.
+Current status: 62 dense fixtures (22 Gaussian + 20 binomial + 20 Poisson) plus
+12 genuinely-sparse Gaussian fixtures, all at max relative error ~1e-14 with
+`npasses` identical to R on every case. Fixture family is encoded in the filename
+prefix (`bin_*` binomial, `pois_*` Poisson, `sp_*` sparse Gaussian, else dense
+Gaussian); the Rust parity harness dispatches on it. The sparse fixtures come
+from R's *sparse* path (`spelnet` on a `dgCMatrix`), so the CSC solver is pinned
+to R directly, not just to our own dense solver.
 
 Two traps when generating fixtures:
 
@@ -216,16 +219,44 @@ the deviance bookkeeping:
 
 Like binomial, `Point` is concrete over `Dense` for the weighted per-column ops.
 
+## Sparse `X` (Gaussian) — done
+
+Sparse support is the payoff of the `DesignMatrix` trait. A sparse `X` cannot be
+centered without destroying its sparsity, so it is kept in raw CSC form and the
+standardization correction is folded into each column op (glmnetpp's `sp_*`
+solvers). The trait now abstracts exactly the two operations the Gaussian solver
+needs, with a per-backend correction state (`type Corr`):
+
+- **`grad(j, r, corr)`** — dense: a plain (weighted) dot, `Corr = ()`. Sparse:
+  `[sum_{i in nz(j)} w_i x_ij (r_i + o)] / xs_j`, `Corr = f64` (the mean-shift `o`).
+- **`update_resid(j, beta_diff, r, corr)`** — dense: `r -= beta_diff * x_j`.
+  Sparse: `r -= (beta_diff/xs_j) * x_j` over the nonzeros, `o += (beta_diff/xs_j)*xm_j`.
+
+The trick works because the true weighted residual is `r + o` and is kept
+**weighted-mean-zero** (every update preserves `sum_i w_i r_i = 0`), so the
+`xm`-cross-term in the true gradient vanishes and each op stays O(nnz in column
+`j`). The dense/binomial/poisson solvers were untouched by the refactor (the
+parity suite confirms it); the Gaussian `Point`/path loop is now generic over the
+trait, so dense and sparse share everything but standardization and matrix
+construction.
+
+Sparse standardization (`standardize_naive_sparse`, glmnetpp `SpStandardize1`)
+differs from dense in two ways: `X` is left untouched, and `y` is centered/scaled
+*without* the `sqrt(w)` premultiply (the weights stay separate, applied inside
+`grad`). Everything downstream is the shared `run_path`.
+
+Measured: on `n=2000, p=20000` at 1% density, the sparse path is ~23x faster than
+densifying, with identical `npasses` and coefficients. Gaussian only for now;
+binomial/poisson sparse would need their `Point` generalized off `Dense`.
+
 ## What's next
 
 In rough order of value:
 
 1. **`gaussian_cov`** — the default solver for `nvars < 500`. Shares the driver;
    different point solver (maintains a gradient/covariance cache, no strong rule).
-3. **Sparse (CSC)** — `matrix.rs::DesignMatrix` isolates the operations that need
-   the `xm`/`xs` correction. Sparse `X` is never centered (that would destroy
-   sparsity), so the correction is applied per gradient and per residual update.
-   Generalize binomial's `Point` off `Dense` as part of this.
+2. **Sparse binomial / poisson** — generalize their `Point` off `Dense` onto a
+   trait carrying the GLM weighted-column ops, then add the `sp_*` correction.
 3. **`multinomial` / `cox`** — both reuse the IRLS loop; cox needs risk-set
    gradient machinery.
 4. **`cv.glmnet`** — pure Python, on top of the path object.

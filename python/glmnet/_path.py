@@ -123,10 +123,41 @@ class GlmnetPath:
             return (eta > 0).astype(float)
         raise ValueError(f"unknown predict type {type!r}")
 
+    def summary(self) -> str:
+        """A per-lambda `Df / %Dev / Lambda` table, as R's ``print.glmnet``.
+
+        ``Df`` is the number of nonzero coefficients and ``%Dev`` is the percent
+        of null deviance explained. Returns the formatted string (also what
+        ``print(path)`` shows).
+        """
+        rows = [f"{'':>4}  {'Df':>4}  {'%Dev':>6}  {'Lambda':>10}"]
+        df = self.df
+        for i in range(self.lmu):
+            rows.append(
+                f"{i + 1:>4}  {df[i]:>4}  {100 * self.dev_ratio[i]:>6.2f}  {self.lambda_[i]:>10.4g}"
+            )
+        return "\n".join(rows)
+
+    def to_frame(self):
+        """The summary as a pandas ``DataFrame`` (requires pandas)."""
+        import pandas as pd
+
+        return pd.DataFrame(
+            {
+                "Df": self.df,
+                "pct_dev": 100 * self.dev_ratio,
+                "lambda": self.lambda_,
+            },
+            index=np.arange(1, self.lmu + 1),
+        )
+
+    def __str__(self) -> str:
+        return self.summary()
+
     def __repr__(self) -> str:
         w = f", warning={self.warning[0]}" if self.warning else ""
         return (
-            f"GlmnetPath(alpha={self.alpha}, lmu={self.lmu}, "
+            f"GlmnetPath(family={self.family!r}, alpha={self.alpha}, lmu={self.lmu}, "
             f"lambda=[{self.lambda_[0]:.4g} .. {self.lambda_[-1]:.4g}], "
             f"dev_ratio<={self.dev_ratio[-1]:.4g}{w})"
         )
@@ -165,7 +196,16 @@ def glmnet(
             f"family {family!r} not supported (yet); use 'gaussian', 'binomial' or 'poisson'"
         )
 
-    x = np.ascontiguousarray(x, dtype=float)
+    # Sparse input is detected by duck typing so scipy stays an optional dependency.
+    is_sparse = hasattr(x, "tocsc") and hasattr(x, "shape")
+    if is_sparse:
+        if family != "gaussian":
+            raise ValueError("sparse X is currently supported only for family='gaussian'")
+        nvars = x.shape[1]
+    else:
+        x = np.ascontiguousarray(x, dtype=float)
+        nvars = x.shape[1]
+
     y = np.ascontiguousarray(y, dtype=float).ravel()
 
     if family == "binomial":
@@ -183,15 +223,12 @@ def glmnet(
             return None
         arr = np.atleast_1d(np.asarray(v, dtype=float))
         if arr.size == 1:
-            arr = np.repeat(arr, x.shape[1])
-        if arr.size != x.shape[1]:
-            raise ValueError(f"{name} must have length 1 or {x.shape[1]}")
+            arr = np.repeat(arr, nvars)
+        if arr.size != nvars:
+            raise ValueError(f"{name} must have length 1 or {nvars}")
         return [float(t) for t in arr]
 
-    res = _core.elnet_path(
-        x,
-        y,
-        family=family,
+    common = dict(
         alpha=float(alpha),
         nlambda=int(nlambda),
         lambda_min_ratio=lambda_min_ratio,
@@ -207,6 +244,38 @@ def glmnet(
         upper_limits=_vec(upper_limits, "upper_limits"),
         weights=None if weights is None else [float(t) for t in np.atleast_1d(weights)],
         exclude=None if exclude is None else [int(t) for t in np.atleast_1d(exclude)],
+    )
+
+    if is_sparse:
+        xc = x.tocsc()
+        xc.sum_duplicates()  # our solver sums stored entries; collapse any dupes
+        n, p = xc.shape
+        res = _core.elnet_sparse(
+            int(n),
+            int(p),
+            [int(v) for v in xc.indptr],
+            [int(v) for v in xc.indices],
+            np.ascontiguousarray(xc.data, dtype=float),
+            y,
+            **common,
+        )
+        return GlmnetPath(
+            lambda_=res["lambda"],
+            a0=res["a0"],
+            beta=res["beta"],
+            dev_ratio=res["dev_ratio"],
+            nulldev=res["nulldev"],
+            npasses=res["npasses"],
+            alpha=float(alpha),
+            family=family,
+            warning=res["warning"],
+        )
+
+    res = _core.elnet_path(
+        x,
+        y,
+        family=family,
+        **common,
     )
 
     return GlmnetPath(

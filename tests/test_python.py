@@ -13,7 +13,12 @@ import pytest
 
 from glmnet import glmnet, lambda_interp
 
-FIXTURES = sorted((pathlib.Path(__file__).parent / "fixtures").glob("*.json"))
+# `sp_*` (sparse CSC schema) and `cv_*` (cross-validation schema) fixtures are
+# covered by their own tests, not this dense-input parametrization.
+FIXTURES = sorted(
+    p for p in (pathlib.Path(__file__).parent / "fixtures").glob("*.json")
+    if not p.stem.startswith(("sp_", "cv_"))
+)
 
 
 def _load(path):
@@ -331,3 +336,189 @@ def test_sklearn_logistic_matches_sklearn():
 
     np.testing.assert_allclose(ours.coef_.ravel(), theirs.coef_.ravel(), rtol=2e-3, atol=2e-3)
     np.testing.assert_allclose(ours.intercept_, theirs.intercept_.ravel(), rtol=2e-3, atol=2e-3)
+
+
+# --- sparse X --------------------------------------------------------------
+
+
+def test_sparse_matches_dense():
+    """A scipy CSC matrix must give the same fit as its dense counterpart."""
+    sp = pytest.importorskip("scipy.sparse")
+    rng = np.random.default_rng(30)
+    n, p = 150, 40
+    Xd = rng.standard_normal((n, p))
+    Xd[rng.random((n, p)) < 0.7] = 0.0  # ~70% zeros
+    y = Xd[:, :5] @ np.array([1.5, -1.0, 0.8, 0.0, 0.6]) + rng.standard_normal(n) * 0.4
+
+    dense = glmnet(Xd, y)
+    sparse = glmnet(sp.csc_matrix(Xd), y)
+
+    assert sparse.lmu == dense.lmu
+    assert sparse.npasses == dense.npasses
+    np.testing.assert_allclose(sparse.lambda_, dense.lambda_, rtol=1e-9, atol=1e-11)
+    np.testing.assert_allclose(sparse.a0, dense.a0, rtol=1e-8, atol=1e-9)
+    np.testing.assert_allclose(sparse.beta, dense.beta, rtol=1e-8, atol=1e-9)
+
+
+def test_sparse_csr_input_accepted():
+    """CSR input is converted to CSC internally, so it must also work."""
+    sp = pytest.importorskip("scipy.sparse")
+    rng = np.random.default_rng(31)
+    Xd = rng.standard_normal((80, 20))
+    Xd[rng.random((80, 20)) < 0.6] = 0.0
+    y = Xd[:, 0] * 2 - Xd[:, 3] + rng.standard_normal(80) * 0.3
+    csr = glmnet(sp.csr_matrix(Xd), y)
+    dense = glmnet(Xd, y)
+    np.testing.assert_allclose(csr.beta, dense.beta, rtol=1e-8, atol=1e-9)
+
+
+def test_sparse_predict_works():
+    sp = pytest.importorskip("scipy.sparse")
+    rng = np.random.default_rng(32)
+    Xd = rng.standard_normal((60, 10))
+    Xd[Xd < 0.5] = 0.0
+    y = Xd[:, 1] * 1.5 + rng.standard_normal(60) * 0.3
+    fit = glmnet(sp.csc_matrix(Xd), y)
+    # predict takes dense X; check it matches the manual linear predictor.
+    pred = fit.predict(Xd, s=fit.lambda_[10]).ravel()
+    c = fit.coef(s=fit.lambda_[10]).ravel()
+    np.testing.assert_allclose(pred, Xd @ c[1:] + c[0], rtol=1e-10)
+
+
+def test_sparse_rejects_nongaussian():
+    sp = pytest.importorskip("scipy.sparse")
+    rng = np.random.default_rng(33)
+    Xd = rng.standard_normal((50, 6))
+    y = (rng.random(50) < 0.5).astype(float)
+    with pytest.raises(ValueError, match="gaussian"):
+        glmnet(sp.csc_matrix(Xd), y, family="binomial")
+
+
+# --- cross-validation (cv_glmnet) ------------------------------------------
+
+import glob as _glob
+
+CV_FIXTURES = sorted(_glob.glob(str(pathlib.Path(__file__).parent / "fixtures" / "cv_*.json")))
+
+
+@pytest.mark.parametrize("path", CV_FIXTURES, ids=lambda p: pathlib.Path(p).stem)
+def test_cv_matches_r(path):
+    """cv_glmnet reproduces R's cv.glmnet cvm/cvsd and lambda.min/1se given the
+    same folds."""
+    from glmnet import cv_glmnet
+
+    with open(path) as fh:
+        d = json.load(fh)
+    n, p = d["n"], d["p"]
+    X = np.asarray(d["x"], dtype=float).reshape((n, p), order="F")
+    y = np.asarray(d["y"], dtype=float)
+
+    cv = cv_glmnet(
+        X,
+        y,
+        family=d["family"],
+        type_measure=d["measure"],
+        foldid=np.asarray(d["foldid0"], dtype=int),
+        alpha=d["alpha"],
+    )
+
+    assert cv.lambda_.size == len(d["lambda"])
+    np.testing.assert_allclose(cv.lambda_, d["lambda"], rtol=1e-11, atol=1e-13)
+    # cvm/cvsd depend on the fold fits (bit-matched to R), the interpolation onto
+    # the full grid, and the exact loss + aggregation formulas -- all reproduced,
+    # so this matches to ~1e-13.
+    np.testing.assert_allclose(cv.cvm, d["cvm"], rtol=1e-11, atol=1e-12)
+    np.testing.assert_allclose(cv.cvsd, d["cvsd"], rtol=1e-11, atol=1e-12)
+    np.testing.assert_array_equal(cv.nzero, d["nzero"])
+    assert cv.lambda_min == pytest.approx(d["lambda_min"], rel=1e-10)
+    assert cv.lambda_1se == pytest.approx(d["lambda_1se"], rel=1e-10)
+
+
+def test_cv_predict_and_coef():
+    from glmnet import cv_glmnet
+
+    rng = np.random.default_rng(40)
+    X = rng.standard_normal((150, 12))
+    y = X[:, :3] @ np.array([2.0, -1.0, 1.5]) + rng.standard_normal(150)
+    cv = cv_glmnet(X, y, seed=0)
+
+    # coef/predict at the two named lambdas resolve to the underlying path.
+    c_min = cv.coef(s="lambda.min").ravel()
+    c_1se = cv.coef(s="lambda.1se").ravel()
+    assert c_min.shape == (X.shape[1] + 1,)
+    # 1se is a larger lambda -> at least as sparse as min.
+    assert np.count_nonzero(c_1se[1:]) <= np.count_nonzero(c_min[1:])
+    np.testing.assert_allclose(
+        cv.predict(X, s="lambda.min").ravel(),
+        X @ c_min[1:] + c_min[0],
+        rtol=1e-10,
+    )
+    assert cv.lambda_1se >= cv.lambda_min
+
+
+def test_cv_auc_is_sane():
+    """AUC isn't bit-matched to R, but must be a valid [0,1] score that peaks at
+    a sensible lambda."""
+    from glmnet import cv_glmnet
+
+    rng = np.random.default_rng(41)
+    X = rng.standard_normal((300, 8))
+    y = (rng.random(300) < 1.0 / (1.0 + np.exp(-(X[:, :3] @ [1.5, -1.0, 1.2])))).astype(float)
+    cv = cv_glmnet(X, y, family="binomial", type_measure="auc", seed=1)
+    assert np.all((cv.cvm >= 0) & (cv.cvm <= 1))
+    assert cv.cvm[cv.index_min] > 0.7  # signal is learnable
+
+
+def test_cv_rejects_bad_measure():
+    from glmnet import cv_glmnet
+
+    rng = np.random.default_rng(42)
+    X = rng.standard_normal((40, 4))
+    y = rng.standard_normal(40)
+    with pytest.raises(ValueError, match="not available"):
+        cv_glmnet(X, y, family="gaussian", type_measure="auc")
+
+
+# --- summaries -------------------------------------------------------------
+
+
+def test_path_summary_shape_and_content():
+    rng = np.random.default_rng(50)
+    X = rng.standard_normal((100, 6))
+    y = X[:, 0] * 2 + rng.standard_normal(100)
+    fit = glmnet(X, y)
+    s = fit.summary()
+    lines = s.splitlines()
+    assert lines[0].split() == ["Df", "%Dev", "Lambda"]
+    assert len(lines) == fit.lmu + 1  # header + one row per lambda
+    # First lambda: all coefficients zero -> Df 0, %Dev 0.
+    first = lines[1].split()
+    assert first[0] == "1" and first[1] == "0" and float(first[2]) == 0.0
+    assert str(fit) == s  # __str__ delegates to summary
+
+
+def test_cv_summary_reports_min_and_1se():
+    from glmnet import cv_glmnet
+
+    rng = np.random.default_rng(51)
+    X = rng.standard_normal((150, 8))
+    y = X[:, :3] @ np.array([2.0, -1.0, 1.5]) + rng.standard_normal(150)
+    cv = cv_glmnet(X, y, seed=0)
+    s = cv.summary()
+    assert "Mean-Squared Error" in s
+    lines = s.splitlines()
+    assert lines[-2].startswith("min") and lines[-1].startswith("1se")
+    # The reported index/measure must match the stored fields.
+    assert f"{cv.index_min + 1}" in lines[-2]
+    assert f"{cv.index_1se + 1}" in lines[-1]
+
+
+def test_to_frame_optional_pandas():
+    pd = pytest.importorskip("pandas")
+    rng = np.random.default_rng(52)
+    X = rng.standard_normal((80, 5))
+    y = X[:, 1] * 1.5 + rng.standard_normal(80)
+    fit = glmnet(X, y)
+    frame = fit.to_frame()
+    assert list(frame.columns) == ["Df", "pct_dev", "lambda"]
+    assert len(frame) == fit.lmu

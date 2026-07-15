@@ -3,7 +3,7 @@
 //! `coef(s=...)`, the scikit-learn estimators) live in the Python package, where
 //! they are far easier to iterate on.
 
-use glmnet_core::{elnet_naive, fishnet, lognet, Control, FitConfig};
+use glmnet_core::{elnet_naive, elnet_naive_sparse, fishnet, lognet, Control, FitConfig};
 use numpy::{IntoPyArray, PyArray2, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -203,8 +203,86 @@ fn elnet_path<'py>(
     pack(py, p, fit)
 }
 
+/// Sparse Gaussian path. `col_ptr`/`row_idx`/`values` are CSC arrays (as in a
+/// scipy `csc_matrix`). Gaussian only for now; the marshaling mirrors the dense
+/// entry point above.
+#[allow(clippy::too_many_arguments)]
+#[pyfunction]
+#[pyo3(signature = (
+    n, p, col_ptr, row_idx, values, y, *, alpha=1.0, nlambda=100,
+    lambda_min_ratio=None, user_lambda=None, standardize=true, intercept=true,
+    thresh=1e-7, maxit=100_000, dfmax=None, pmax=None, penalty_factor=None,
+    lower_limits=None, upper_limits=None, weights=None, exclude=None,
+))]
+fn elnet_sparse<'py>(
+    py: Python<'py>,
+    n: usize,
+    p: usize,
+    col_ptr: Vec<usize>,
+    row_idx: Vec<usize>,
+    values: Vec<f64>,
+    y: PyReadonlyArray1<'py, f64>,
+    alpha: f64,
+    nlambda: usize,
+    lambda_min_ratio: Option<f64>,
+    user_lambda: Option<Vec<f64>>,
+    standardize: bool,
+    intercept: bool,
+    thresh: f64,
+    maxit: usize,
+    dfmax: Option<usize>,
+    pmax: Option<usize>,
+    penalty_factor: Option<Vec<f64>>,
+    lower_limits: Option<Vec<f64>>,
+    upper_limits: Option<Vec<f64>>,
+    weights: Option<Vec<f64>>,
+    exclude: Option<Vec<usize>>,
+) -> PyResult<Bound<'py, PyDict>> {
+    if y.len()? != n {
+        return Err(PyValueError::new_err(format!(
+            "expected y of length {n}, got {}",
+            y.len()?
+        )));
+    }
+    let yv = y.as_slice()?.to_vec();
+    let cfg = build_config(
+        n,
+        p,
+        alpha,
+        nlambda,
+        lambda_min_ratio,
+        user_lambda,
+        standardize,
+        intercept,
+        thresh,
+        maxit,
+        dfmax,
+        pmax,
+        penalty_factor,
+        lower_limits,
+        upper_limits,
+        weights,
+        exclude,
+    );
+
+    let f = elnet_naive_sparse(n, p, &col_ptr, &row_idx, &values, &yv, &cfg)
+        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let fit = CommonFit {
+        lmu: f.lmu,
+        lambda: f.lambda,
+        a0: f.a0,
+        beta: f.beta,
+        dev_ratio: f.dev_ratio,
+        nulldev: f.nulldev,
+        npasses: f.npasses,
+        warning: f.warning.map(|w| (format!("{w:?}"), w.jerr())),
+    };
+    pack(py, p, fit)
+}
+
 #[pymodule]
 fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(elnet_path, m)?)?;
+    m.add_function(wrap_pyfunction!(elnet_sparse, m)?)?;
     Ok(())
 }

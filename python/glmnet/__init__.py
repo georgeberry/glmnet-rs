@@ -14,6 +14,7 @@ Two APIs over one solver:
 """
 
 from ._path import GlmnetPath, glmnet, lambda_interp
+from .cv import CVGlmnet, cv_glmnet
 
-__all__ = ["GlmnetPath", "glmnet", "lambda_interp"]
+__all__ = ["GlmnetPath", "glmnet", "lambda_interp", "CVGlmnet", "cv_glmnet"]
 __version__ = "0.1.0"

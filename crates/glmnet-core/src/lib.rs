@@ -11,14 +11,15 @@ pub mod binomial;
 pub mod control;
 pub mod error;
 pub mod gaussian;
+pub(crate) mod glm_matrix;
 pub(crate) mod kernel;
 pub mod matrix;
 pub mod poisson;
 pub mod standardize;
 
-pub use binomial::{lognet, BinomialFit};
+pub use binomial::{lognet, lognet_sparse, BinomialFit};
 pub use control::{Control, FitConfig};
 pub use error::{FitError, PathWarning};
-pub use gaussian::{elnet_naive, GaussianFit};
-pub use matrix::{Dense, DesignMatrix};
+pub use gaussian::{elnet_naive, elnet_naive_sparse, GaussianFit};
+pub use matrix::{Dense, DesignMatrix, Sparse};
 pub use poisson::{fishnet, PoissonFit};

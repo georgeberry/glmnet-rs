@@ -18,10 +18,10 @@
 //!   strong rule `tlam = alpha * (2*lambda_m - lambda_{m-1})`, with a KKT check
 //!   afterwards to readmit any variable the rule wrongly discarded.
 
-use crate::control::FitConfig;
+use crate::control::{Control, FitConfig};
 use crate::error::{FitError, PathWarning};
-use crate::matrix::{chkvars, Dense, DesignMatrix};
-use crate::standardize::standardize_naive;
+use crate::matrix::{chkvars, chkvars_sparse, Dense, DesignMatrix, Sparse};
+use crate::standardize::{standardize_naive, standardize_naive_sparse, Standardization};
 
 #[derive(Clone, Debug)]
 pub struct GaussianFit {
@@ -91,6 +91,8 @@ struct Point<'a, M: DesignMatrix> {
     iz: bool,
     /// Gradient at `k`, captured during `update_beta` so `update_rsq` can reuse it.
     gk_cache: f64,
+    /// Matrix correction state (unit for dense, mean-shift scalar for sparse).
+    corr: M::Corr,
 }
 
 impl<'a, M: DesignMatrix> Point<'a, M> {
@@ -130,11 +132,12 @@ impl<'a, M: DesignMatrix> Point<'a, M> {
             dlx: 0.0,
             iz: false,
             gk_cache: 0.0,
+            corr: M::Corr::default(),
         };
         // glmnetpp `construct`: seed |grad| for every usable column.
         for k in 0..p {
             if pt.ju[k] {
-                pt.g[k] = pt.x.dot(k, &pt.r).abs();
+                pt.g[k] = pt.x.grad(k, &pt.r, pt.corr).abs();
             }
         }
         pt
@@ -166,7 +169,7 @@ impl<'a, M: DesignMatrix> Point<'a, M> {
 
     #[inline]
     fn update_one(&mut self, k: usize, full: bool, ab: f64, dem: f64) -> Result<(), PointErr> {
-        let gk = self.x.dot(k, &self.r);
+        let gk = self.x.grad(k, &self.r, self.corr);
         let a_old = self.a[k];
         self.update_beta(k, ab, dem, gk);
         if self.a[k] == a_old {
@@ -178,7 +181,7 @@ impl<'a, M: DesignMatrix> Point<'a, M> {
         let diff = self.a[k] - a_old;
         self.dlx = self.dlx.max(self.xv[k] * diff * diff);
         self.rsq += diff * (2.0 * self.gk_cache - diff * self.xv[k]);
-        self.x.axpy(k, -diff, &mut self.r);
+        self.x.update_resid(k, diff, &mut self.r, &mut self.corr);
         Ok(())
     }
 
@@ -224,7 +227,7 @@ impl<'a, M: DesignMatrix> Point<'a, M> {
             if self.ix[k] || !self.ju[k] {
                 continue;
             }
-            self.g[k] = self.x.dot(k, &self.r).abs();
+            self.g[k] = self.x.grad(k, &self.r, self.corr).abs();
         }
         let mut updated = false;
         for k in 0..self.x.ncols() {
@@ -328,7 +331,94 @@ pub fn elnet_naive(
         return Err(FitError::AllExcluded);
     }
 
-    // --- penalty factors ---------------------------------------------------
+    // --- penalty / box / nulldev (shared with the sparse path) -------------
+    let vp = normalize_penalty(cfg, p)?;
+    let (cl_lo, cl_hi) = box_limits(cfg, p, &mut ctl)?;
+
+    let w_raw = cfg.weights.clone().unwrap_or_else(|| vec![1.0; n]);
+    let nulldev = null_deviance(y, &w_raw, cfg.intercept);
+
+    // --- standardize (dense: modifies x and y in place) --------------------
+    let mut yv = y.to_vec();
+    let mut w = w_raw.clone();
+    let st = standardize_naive(&mut x, &mut yv, &mut w, cfg.standardize, cfg.intercept, &ju);
+
+    Ok(run_path(
+        x, yv, &st, &ju, &vp, cl_lo, cl_hi, nulldev, cfg, ctl,
+    ))
+}
+
+/// Fit the Gaussian elastic-net path for a **sparse** design matrix (CSC).
+///
+/// `col_ptr` (length `p+1`), `row_idx` and `values` are the CSC arrays; `y` has
+/// length `n`. The matrix is never centered -- the standardization correction is
+/// folded into the solver (see [`crate::matrix::Sparse`]).
+pub fn elnet_naive_sparse(
+    n: usize,
+    p: usize,
+    col_ptr: &[usize],
+    row_idx: &[usize],
+    values: &[f64],
+    y: &[f64],
+    cfg: &FitConfig,
+) -> Result<GaussianFit, FitError> {
+    assert_eq!(col_ptr.len(), p + 1);
+    assert_eq!(row_idx.len(), values.len());
+    assert_eq!(y.len(), n);
+
+    let mut ctl = cfg.control;
+
+    // --- inclusion set -----------------------------------------------------
+    let mut ju = chkvars_sparse(n, p, col_ptr, values);
+    for &j in &cfg.exclude {
+        if j < p {
+            ju[j] = false;
+        }
+    }
+    if !ju.iter().any(|&b| b) {
+        return Err(FitError::AllExcluded);
+    }
+
+    // --- penalty / box / nulldev (identical to the dense path) -------------
+    let vp = normalize_penalty(cfg, p)?;
+    let (cl_lo, cl_hi) = box_limits(cfg, p, &mut ctl)?;
+
+    let w_raw = cfg.weights.clone().unwrap_or_else(|| vec![1.0; n]);
+    let nulldev = null_deviance(y, &w_raw, cfg.intercept);
+
+    // --- sparse standardize (leaves X untouched; y centered/scaled) --------
+    let mut yv = y.to_vec();
+    let mut w = w_raw.clone();
+    let st = standardize_naive_sparse(
+        col_ptr,
+        row_idx,
+        values,
+        &mut yv,
+        &mut w,
+        p,
+        cfg.standardize,
+        cfg.intercept,
+        &ju,
+    );
+
+    let x = Sparse::new(
+        n,
+        p,
+        col_ptr.to_vec(),
+        row_idx.to_vec(),
+        values.to_vec(),
+        w,
+        st.xm.clone(),
+        st.xs.clone(),
+    );
+
+    Ok(run_path(
+        x, yv, &st, &ju, &vp, cl_lo, cl_hi, nulldev, cfg, ctl,
+    ))
+}
+
+/// Normalize penalty factors to sum to `p` over all columns (glmnetpp).
+fn normalize_penalty(cfg: &FitConfig, p: usize) -> Result<Vec<f64>, FitError> {
     let mut vp = cfg.penalty_factor.clone().unwrap_or_else(|| vec![1.0; p]);
     if vp.iter().cloned().fold(f64::NEG_INFINITY, f64::max) <= 0.0 {
         return Err(FitError::NonPositivePenalty);
@@ -336,67 +426,86 @@ pub fn elnet_naive(
     vp.iter_mut().for_each(|v| *v = v.max(0.0));
     let vsum: f64 = vp.iter().sum();
     vp.iter_mut().for_each(|v| *v *= p as f64 / vsum);
+    Ok(vp)
+}
 
-    // --- box constraints ---------------------------------------------------
-    // R substitutes +-big for +-Inf before calling C++; without that, the
-    // `cl *= xs` rescale below would produce Inf * 0 = NaN on constant columns.
+/// Substitute `+-big` for `+-Inf`, validate signs, and disable `fdev` when a
+/// bound is exactly zero (glmnet.R:510). Returns the substituted limits.
+fn box_limits(
+    cfg: &FitConfig,
+    p: usize,
+    ctl: &mut Control,
+) -> Result<(Vec<f64>, Vec<f64>), FitError> {
+    let big = ctl.big;
     let subst = |v: f64| {
         if v == f64::NEG_INFINITY {
-            -ctl.big
+            -big
         } else if v == f64::INFINITY {
-            ctl.big
+            big
         } else {
             v
         }
     };
-    let mut cl_lo: Vec<f64> = cfg
+    let cl_lo: Vec<f64> = cfg
         .lower_limits
         .clone()
         .unwrap_or_else(|| vec![f64::NEG_INFINITY; p])
         .into_iter()
         .map(subst)
         .collect();
-    let mut cl_hi: Vec<f64> = cfg
+    let cl_hi: Vec<f64> = cfg
         .upper_limits
         .clone()
         .unwrap_or_else(|| vec![f64::INFINITY; p])
         .into_iter()
         .map(subst)
         .collect();
-
     if cl_lo.iter().any(|&v| v > 0.0) {
         return Err(FitError::PositiveLowerLimit);
     }
     if cl_hi.iter().any(|&v| v < 0.0) {
         return Err(FitError::NegativeUpperLimit);
     }
-
-    // A bound of exactly zero pins its coefficient at zero, which yields no
-    // deviance change and would spuriously trip the `fdev` early stop. R
-    // disables `fdev` for the whole fit in that case (glmnet.R:510).
     if cl_lo.iter().chain(cl_hi.iter()).any(|&v| v == 0.0) {
         ctl.fdev = 0.0;
     }
+    Ok((cl_lo, cl_hi))
+}
 
-    // --- null deviance (raw weights, before normalization) -----------------
-    let w_raw = cfg.weights.clone().unwrap_or_else(|| vec![1.0; n]);
+/// Null deviance `sum(w * (y - ybar)^2)` with raw (un-normalized) weights.
+fn null_deviance(y: &[f64], w_raw: &[f64], intercept: bool) -> f64 {
     let wsum_raw: f64 = w_raw.iter().sum();
-    let ybar = if cfg.intercept {
-        y.iter().zip(&w_raw).map(|(yi, wi)| yi * wi).sum::<f64>() / wsum_raw
+    let ybar = if intercept {
+        y.iter().zip(w_raw).map(|(yi, wi)| yi * wi).sum::<f64>() / wsum_raw
     } else {
         0.0
     };
-    let nulldev: f64 = y
-        .iter()
-        .zip(&w_raw)
+    y.iter()
+        .zip(w_raw)
         .map(|(yi, wi)| wi * (yi - ybar).powi(2))
-        .sum();
+        .sum()
+}
 
-    // --- standardize -------------------------------------------------------
-    let mut yv = y.to_vec();
-    let mut w = w_raw.clone();
-    let st = standardize_naive(&mut x, &mut yv, &mut w, cfg.standardize, cfg.intercept, &ju);
+/// The shared lambda path: coordinate descent at each lambda, early stopping,
+/// and un-standardization. Generic over dense/sparse via [`DesignMatrix`].
+///
+/// `cl_lo`/`cl_hi` are the substituted (not yet ys/xs-scaled) box limits.
+#[allow(clippy::too_many_arguments)]
+fn run_path<M: DesignMatrix>(
+    x: M,
+    r_init: Vec<f64>,
+    st: &Standardization,
+    ju: &[bool],
+    vp: &[f64],
+    mut cl_lo: Vec<f64>,
+    mut cl_hi: Vec<f64>,
+    nulldev: f64,
+    cfg: &FitConfig,
+    ctl: Control,
+) -> GaussianFit {
+    let p = x.ncols();
 
+    // Rescale box limits into standardized coordinates (cl /= ys; *= xs if isd).
     for j in 0..p {
         cl_lo[j] /= st.ys;
         cl_hi[j] /= st.ys;
@@ -428,7 +537,7 @@ pub fn elnet_naive(
 
     let nx = cfg.pmax.min(p);
     let mut pt = Point::new(
-        &x, yv, &st.xv, &vp, &cl_lo, &cl_hi, &ju, cfg.thresh, cfg.maxit, nx,
+        &x, r_init, &st.xv, vp, &cl_lo, &cl_hi, ju, cfg.thresh, cfg.maxit, nx,
     );
 
     // --- path --------------------------------------------------------------
@@ -528,7 +637,7 @@ pub fn elnet_naive(
         fix_lam(&mut lambda);
     }
 
-    Ok(GaussianFit {
+    GaussianFit {
         lmu,
         lambda,
         a0,
@@ -537,5 +646,5 @@ pub fn elnet_naive(
         nulldev,
         npasses: pt.nlp,
         warning,
-    })
+    }
 }

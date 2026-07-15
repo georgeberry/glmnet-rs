@@ -137,6 +137,163 @@ pub fn standardize_naive(
     Standardization { xm, xs, ym, ys, xv }
 }
 
+/// Sparse Gaussian standardization (glmnetpp `SpStandardize1`).
+///
+/// Unlike the dense path, `X` is **not** modified (centering would destroy
+/// sparsity) and `y` is centered/scaled *without* the `sqrt(w)` premultiply --
+/// the weights stay separate and are folded into the solver's column ops. The
+/// returned `xm`/`xs`/`xv` are what the sparse solver needs; `y` is overwritten
+/// in place with the (unweighted) initial residual `(y - ym) / ys`.
+#[allow(clippy::too_many_arguments)]
+pub fn standardize_naive_sparse(
+    col_ptr: &[usize],
+    row_idx: &[usize],
+    values: &[f64],
+    y: &mut [f64],
+    w: &mut [f64],
+    p: usize,
+    isd: bool,
+    intr: bool,
+    ju: &[bool],
+) -> Standardization {
+    let wsum: f64 = w.iter().sum();
+    for wi in w.iter_mut() {
+        *wi /= wsum;
+    }
+
+    let mut xm = vec![0.0; p];
+    let mut xs = vec![1.0; p];
+    let mut xv = vec![0.0; p];
+    let ym;
+    let ys;
+
+    // Weighted sums over the stored nonzeros of column j: (sum w_i x, sum w_i x^2).
+    let col_moments = |j: usize| -> (f64, f64) {
+        let (b, e) = (col_ptr[j], col_ptr[j + 1]);
+        let mut s1 = 0.0;
+        let mut s2 = 0.0;
+        for idx in b..e {
+            let wi = w[row_idx[idx]];
+            let x = values[idx];
+            s1 += wi * x;
+            s2 += wi * x * x;
+        }
+        (s1, s2)
+    };
+
+    if !intr {
+        ym = 0.0;
+        // ys = sqrt(sum w_i y_i^2); note the weight (no sqrt(w) baked into y).
+        ys = w
+            .iter()
+            .zip(y.iter())
+            .map(|(wi, yi)| wi * yi * yi)
+            .sum::<f64>()
+            .sqrt();
+        for yi in y.iter_mut() {
+            *yi /= ys;
+        }
+        for j in 0..p {
+            if !ju[j] {
+                continue;
+            }
+            xm[j] = 0.0;
+            let (mean, ex2) = col_moments(j);
+            xv[j] = ex2;
+            if isd {
+                let xbq = mean * mean;
+                let vc = xv[j] - xbq;
+                xs[j] = vc.sqrt();
+                xv[j] = 1.0 + xbq / vc;
+            } else {
+                xs[j] = 1.0;
+            }
+        }
+    } else {
+        for j in 0..p {
+            if !ju[j] {
+                continue;
+            }
+            let (mean, ex2) = col_moments(j);
+            xm[j] = mean;
+            xv[j] = ex2 - mean * mean;
+            if isd {
+                xs[j] = xv[j].sqrt();
+            }
+        }
+        if isd {
+            xv.iter_mut().for_each(|v| *v = 1.0);
+        }
+        ym = w.iter().zip(y.iter()).map(|(wi, yi)| wi * yi).sum();
+        for yi in y.iter_mut() {
+            *yi -= ym;
+        }
+        ys = w
+            .iter()
+            .zip(y.iter())
+            .map(|(wi, yi)| wi * yi * yi)
+            .sum::<f64>()
+            .sqrt();
+        for yi in y.iter_mut() {
+            *yi /= ys;
+        }
+    }
+
+    Standardization { xm, xs, ym, ys, xv }
+}
+
+/// Sparse GLM standardization (glmnetpp `SpLStandardize2`): compute the weighted
+/// column means `xm` and scales `xs` from a CSC matrix without touching `X` and
+/// without scaling `y`. `w` must already sum to 1.
+#[allow(clippy::too_many_arguments)]
+pub fn standardize_lognet_sparse(
+    col_ptr: &[usize],
+    row_idx: &[usize],
+    values: &[f64],
+    w: &[f64],
+    p: usize,
+    isd: bool,
+    intr: bool,
+    ju: &[bool],
+) -> (Vec<f64>, Vec<f64>) {
+    let mut xm = vec![0.0; p];
+    let mut xs = vec![1.0; p];
+
+    // (sum w_i x_ij, sum w_i x_ij^2) over column j's stored nonzeros.
+    let moments = |j: usize| -> (f64, f64) {
+        let (b, e) = (col_ptr[j], col_ptr[j + 1]);
+        let mut s1 = 0.0;
+        let mut s2 = 0.0;
+        for idx in b..e {
+            let wi = w[row_idx[idx]];
+            let x = values[idx];
+            s1 += wi * x;
+            s2 += wi * x * x;
+        }
+        (s1, s2)
+    };
+
+    for j in 0..p {
+        if !ju[j] {
+            continue;
+        }
+        let (mean, ex2) = moments(j);
+        if intr {
+            xm[j] = mean;
+            if isd {
+                xs[j] = (ex2 - mean * mean).sqrt();
+            }
+        } else {
+            xm[j] = 0.0;
+            if isd {
+                xs[j] = (ex2 - mean * mean).sqrt();
+            }
+        }
+    }
+
+    (xm, xs)
+}
+
 /// Weighted standardization for the GLM families (glmnetpp `LStandardize1`).
 ///
 /// Unlike the Gaussian path, `X` is only **centered** (and optionally scaled),
