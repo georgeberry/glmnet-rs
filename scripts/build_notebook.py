@@ -24,7 +24,7 @@ cells = [
     md(
         "# glmnet-rs — a tour on two real datasets\n"
         "\n"
-        "[`glmnet-rs`](https://github.com/georgeberry/glmnet-rust) is a Rust port of "
+        "[`glmnet-rs`](https://github.com/georgeberry/glmnet-rs) is a Rust port of "
         "the [glmnet](https://glmnet.stanford.edu) elastic-net solver, with a Python "
         "front end. Its coefficients match R glmnet to ~1e-13 (verified on the two "
         "datasets below).\n"

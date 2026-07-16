@@ -33,5 +33,5 @@ First release. A Rust port of R glmnet's elastic-net coordinate descent
 - Validation on two real datasets (Wine Quality, Leukemia) and a runnable
   example notebook.
 
-[Unreleased]: https://github.com/georgeberry/glmnet-rust/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/georgeberry/glmnet-rust/releases/tag/v0.1.0
+[Unreleased]: https://github.com/georgeberry/glmnet-rs/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/georgeberry/glmnet-rs/releases/tag/v0.1.0

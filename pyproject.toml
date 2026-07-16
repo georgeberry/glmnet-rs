@@ -22,9 +22,9 @@ dependencies = ["numpy>=1.22"]
 dynamic = ["version"]
 
 [project.urls]
-Homepage = "https://github.com/georgeberry/glmnet-rust"
-Repository = "https://github.com/georgeberry/glmnet-rust"
-Changelog = "https://github.com/georgeberry/glmnet-rust/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/georgeberry/glmnet-rs"
+Repository = "https://github.com/georgeberry/glmnet-rs"
+Changelog = "https://github.com/georgeberry/glmnet-rs/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 sklearn = ["scikit-learn>=1.0"]

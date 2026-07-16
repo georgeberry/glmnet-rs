@@ -14,7 +14,7 @@ manage. Configure it once:
 1. Create the project on PyPI (first upload can be done manually, or configure a
    "pending" trusted publisher before the first release).
 2. On PyPI, add a trusted publisher for this repo:
-   - Owner: `georgeberry`, Repository: `glmnet-rust`
+   - Owner: `georgeberry`, Repository: `glmnet-rs`
    - Workflow: `release.yml`
    - Environment: `pypi`
 3. In the GitHub repo settings, create an Environment named `pypi` (the
