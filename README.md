@@ -16,6 +16,11 @@ datasets (see [`datasets/`](datasets/)). What's still missing (multinomial, Cox,
 [`docs/ROADMAP.md`](docs/ROADMAP.md); porting notes are in
 [`docs/PORTING.md`](docs/PORTING.md).
 
+**Example:** [`examples/glmnet_demo.ipynb`](examples/glmnet_demo.ipynb) is a runnable
+tour on two real datasets — Wine Quality (long, gaussian) and Leukemia gene
+expression (wide, binomial) — covering the path, cross-validation, plots, and
+prediction.
+
 ## Layout
 
 ```
