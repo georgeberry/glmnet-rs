@@ -7,7 +7,7 @@ interpolation, and honest cross-validation possible.
 
 Naming follows R glmnet: `alpha` is the elastic-net mixing parameter and
 `lambda` is the penalty strength. This is the *opposite* of scikit-learn, where
-`alpha` is the penalty strength. See `glmnet.sklearn` for the translation.
+`alpha` is the penalty strength. See `glmnetrs.sklearn` for the translation.
 """
 
 from __future__ import annotations

@@ -10,13 +10,13 @@ import pathlib
 
 import numpy as np
 import pytest
-
-from glmnet import glmnet, lambda_interp
+from glmnetrs import glmnet, lambda_interp
 
 # `sp*` (sparse CSC schema: sp_/spb_/spp_) and `cv_*` (cross-validation schema)
 # fixtures are covered by their own tests, not this dense-input parametrization.
 FIXTURES = sorted(
-    p for p in (pathlib.Path(__file__).parent / "fixtures").glob("*.json")
+    p
+    for p in (pathlib.Path(__file__).parent / "fixtures").glob("*.json")
     if not p.stem.startswith(("sp", "cv_"))
 )
 
@@ -140,7 +140,7 @@ def test_lambda_max_zeroes_all_coefficients():
 def test_sklearn_parameterization_matches_sklearn(alpha, l1_ratio):
     """Our (alpha, l1_ratio) must mean exactly what sklearn's do."""
     sklm = pytest.importorskip("sklearn.linear_model")
-    from glmnet.sklearn import ElasticNet
+    from glmnetrs.sklearn import ElasticNet
 
     rng = np.random.default_rng(5)
     X = rng.standard_normal((120, 10))
@@ -158,7 +158,7 @@ def test_sklearn_mapping_is_identity_for_lasso():
 
     This is exactly why a wrong mapping goes unnoticed: the lasso case hides it.
     """
-    from glmnet.sklearn import _to_glmnet
+    from glmnetrs.sklearn import _to_glmnet
 
     lam, a = _to_glmnet(0.3, 1.0, ys=7.5)
     assert lam == pytest.approx(0.3)
@@ -167,7 +167,7 @@ def test_sklearn_mapping_is_identity_for_lasso():
 
 def test_sklearn_mapping_absorbs_y_scale_for_ridge():
     """Pure ridge: all penalty is L2, so lambda picks up the full ys factor."""
-    from glmnet.sklearn import _to_glmnet
+    from glmnetrs.sklearn import _to_glmnet
 
     lam, a = _to_glmnet(0.3, 0.0, ys=7.5)
     assert lam == pytest.approx(0.3 * 7.5)
@@ -199,7 +199,7 @@ def test_glmnet_l2_penalty_carries_inverse_y_scale():
 
 
 def test_positive_constraint():
-    from glmnet.sklearn import Lasso
+    from glmnetrs.sklearn import Lasso
 
     rng = np.random.default_rng(6)
     X = rng.standard_normal((80, 6))
@@ -325,7 +325,7 @@ def test_poisson_class_type_rejected():
 def test_sklearn_logistic_matches_sklearn():
     """Our LogisticRegression must match sklearn's liblinear/saga solution."""
     sklm = pytest.importorskip("sklearn.linear_model")
-    from glmnet.sklearn import LogisticRegression
+    from glmnetrs.sklearn import LogisticRegression
 
     X, y = _logistic_data(15, n=300, p=8)
     C = 2.0  # sklearn penalizes 1/C; ours maps it internally
@@ -396,16 +396,14 @@ def test_sparse_rejects_nongaussian():
 
 # --- cross-validation (cv_glmnet) ------------------------------------------
 
-import glob as _glob
-
-CV_FIXTURES = sorted(_glob.glob(str(pathlib.Path(__file__).parent / "fixtures" / "cv_*.json")))
+CV_FIXTURES = sorted((pathlib.Path(__file__).parent / "fixtures").glob("cv_*.json"))
 
 
 @pytest.mark.parametrize("path", CV_FIXTURES, ids=lambda p: pathlib.Path(p).stem)
 def test_cv_matches_r(path):
     """cv_glmnet reproduces R's cv.glmnet cvm/cvsd and lambda.min/1se given the
     same folds."""
-    from glmnet import cv_glmnet
+    from glmnetrs import cv_glmnet
 
     with open(path) as fh:
         d = json.load(fh)
@@ -435,7 +433,7 @@ def test_cv_matches_r(path):
 
 
 def test_cv_predict_and_coef():
-    from glmnet import cv_glmnet
+    from glmnetrs import cv_glmnet
 
     rng = np.random.default_rng(40)
     X = rng.standard_normal((150, 12))
@@ -459,7 +457,7 @@ def test_cv_predict_and_coef():
 def test_cv_auc_is_sane():
     """AUC isn't bit-matched to R, but must be a valid [0,1] score that peaks at
     a sensible lambda."""
-    from glmnet import cv_glmnet
+    from glmnetrs import cv_glmnet
 
     rng = np.random.default_rng(41)
     X = rng.standard_normal((300, 8))
@@ -470,7 +468,7 @@ def test_cv_auc_is_sane():
 
 
 def test_cv_rejects_bad_measure():
-    from glmnet import cv_glmnet
+    from glmnetrs import cv_glmnet
 
     rng = np.random.default_rng(42)
     X = rng.standard_normal((40, 4))
@@ -498,7 +496,7 @@ def test_path_summary_shape_and_content():
 
 
 def test_cv_summary_reports_min_and_1se():
-    from glmnet import cv_glmnet
+    from glmnetrs import cv_glmnet
 
     rng = np.random.default_rng(51)
     X = rng.standard_normal((150, 8))
@@ -514,7 +512,7 @@ def test_cv_summary_reports_min_and_1se():
 
 
 def test_to_frame_optional_pandas():
-    pd = pytest.importorskip("pandas")
+    pytest.importorskip("pandas")
     rng = np.random.default_rng(52)
     X = rng.standard_normal((80, 5))
     y = X[:, 1] * 1.5 + rng.standard_normal(80)
@@ -561,7 +559,7 @@ def test_path_plot_xlabels():
 
 def test_cv_plot_has_min_1se_lines():
     _mpl_agg()
-    from glmnet import cv_glmnet
+    from glmnetrs import cv_glmnet
 
     rng = np.random.default_rng(62)
     X = rng.standard_normal((150, 8))
@@ -576,7 +574,7 @@ def test_cv_plot_has_min_1se_lines():
 
 def test_cv_plot_binomial_measure_label():
     _mpl_agg()
-    from glmnet import cv_glmnet
+    from glmnetrs import cv_glmnet
 
     rng = np.random.default_rng(63)
     X = rng.standard_normal((200, 6))

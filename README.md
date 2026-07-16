@@ -26,7 +26,7 @@ prediction.
 ```
 crates/glmnet-core/   pure Rust kernels (no Python, no C)
 crates/glmnet-py/     PyO3 bindings, deliberately thin
-python/glmnet/        the user-facing package
+python/glmnetrs/      the user-facing package
 scripts/gen_fixtures.R   generates the R reference fixtures
 tests/fixtures/       committed R glmnet output (tests run without R)
 ```
@@ -37,7 +37,7 @@ Faithful to R — the lambda path is the primitive, because it is what the
 algorithm actually computes:
 
 ```python
-from glmnet import glmnet
+from glmnetrs import glmnet
 
 path = glmnet(X, y, alpha=1.0)     # alpha = elastic-net mixing (1 = lasso)
 path.lambda_                       # (lmu,) descending
@@ -59,7 +59,7 @@ import scipy.sparse as sp
 spath = glmnet(sp.csc_matrix(X), y)          # ~20x faster when p >> n and sparse
 
 # cross-validation to pick lambda (matches R's cv.glmnet)
-from glmnet import cv_glmnet
+from glmnetrs import cv_glmnet
 cv = cv_glmnet(X, y, family="gaussian", type_measure="mse", nfolds=10)
 cv.lambda_min, cv.lambda_1se
 cv.predict(X, s="lambda.1se")
@@ -77,7 +77,7 @@ cv.plot()                  # CV curve with error bars + min/1se lines
 scikit-learn compatible, using **scikit-learn's** meaning of `alpha`:
 
 ```python
-from glmnet.sklearn import ElasticNet, Lasso, LogisticRegression
+from glmnetrs.sklearn import ElasticNet, Lasso, LogisticRegression
 
 m = ElasticNet(alpha=0.1, l1_ratio=0.7).fit(X, y)   # alpha = penalty strength
 m.coef_, m.intercept_
@@ -90,7 +90,7 @@ clf.predict_proba(X)
 > is the penalty strength. In scikit-learn `alpha` *is* the penalty strength and
 > `l1_ratio` is the mixing. Worse, the two objectives are not related by a simple
 > rename: glmnet rescales `y` to unit variance, which leaves the L2 term carrying
-> a factor of `1/sd(y)`. `glmnet.sklearn` handles the conversion; the derivation
+> a factor of `1/sd(y)`. `glmnetrs.sklearn` handles the conversion; the derivation
 > is in [`docs/PORTING.md`](docs/PORTING.md#4-y-is-scaled-to-unit-variance-which-distorts-the-l2-penalty).
 
 ## Develop

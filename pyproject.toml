@@ -6,21 +6,56 @@ build-backend = "maturin"
 name = "glmnet-rs"
 requires-python = ">=3.9"
 description = "glmnet's elastic-net coordinate descent, ported to Rust"
+readme = "README.md"
+authors = [{ name = "George Berry", email = "george.e.berry@gmail.com" }]
 license = { text = "GPL-2.0-only" }
 classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: GNU General Public License v2 (GPLv2)",
   "Programming Language :: Rust",
+  "Programming Language :: Python :: 3",
   "Programming Language :: Python :: Implementation :: CPython",
+  "Topic :: Scientific/Engineering",
 ]
 dependencies = ["numpy>=1.22"]
 dynamic = ["version"]
 
+[project.urls]
+Homepage = "https://github.com/georgeberry/glmnet-rust"
+Repository = "https://github.com/georgeberry/glmnet-rust"
+Changelog = "https://github.com/georgeberry/glmnet-rust/blob/main/CHANGELOG.md"
+
 [project.optional-dependencies]
 sklearn = ["scikit-learn>=1.0"]
 plot = ["matplotlib>=3.4"]
-test = ["pytest", "scikit-learn>=1.0", "matplotlib>=3.4"]
+test = ["pytest", "scipy>=1.7", "scikit-learn>=1.0", "matplotlib>=3.4"]
+dev = [
+  "pytest",
+  "scipy>=1.7",
+  "scikit-learn>=1.0",
+  "matplotlib>=3.4",
+  "black",
+  "isort",
+  "ruff",
+  "pre-commit",
+  "nbformat",
+  "nbclient",
+]
 
 [tool.maturin]
 manifest-path = "crates/glmnet-py/Cargo.toml"
-module-name = "glmnet._core"
+module-name = "glmnetrs._core"
 python-source = "python"
 features = ["pyo3/extension-module"]
+
+[tool.black]
+line-length = 100
+target-version = ["py39"]
+
+[tool.isort]
+profile = "black"
+line_length = 100
+
+[tool.ruff]
+line-length = 100

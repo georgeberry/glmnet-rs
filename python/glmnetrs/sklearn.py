@@ -32,7 +32,7 @@ Equating coefficients gives the mapping used by :func:`_to_glmnet`::
     alpha  = A*r / lambda
 
 Estimators here take **scikit-learn's** names and semantics; use
-:func:`glmnet.glmnet` for R's. ``standardize`` defaults to False here (matching
+:func:`glmnetrs.glmnet` for R's. ``standardize`` defaults to False here (matching
 sklearn) and True in R glmnet.
 """
 
@@ -46,7 +46,7 @@ try:
     from sklearn.base import BaseEstimator, ClassifierMixin, RegressorMixin
 except ImportError as exc:  # pragma: no cover
     raise ImportError(
-        "glmnet.sklearn requires scikit-learn: pip install 'glmnet-rs[sklearn]'"
+        "glmnetrs.sklearn requires scikit-learn: pip install 'glmnet-rs[sklearn]'"
     ) from exc
 
 __all__ = ["ElasticNet", "Lasso", "LogisticRegression"]

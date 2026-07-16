@@ -215,7 +215,7 @@ def cv_glmnet(
 ) -> CVGlmnet:
     """Cross-validate the elastic-net path. See module docstring for the method.
 
-    Extra keyword arguments are forwarded to :func:`glmnet.glmnet` (``alpha``,
+    Extra keyword arguments are forwarded to :func:`glmnetrs.glmnet` (``alpha``,
     ``standardize``, ``penalty_factor``, ...). Returns a :class:`CVGlmnet`.
     """
     if family not in _MEASURES:

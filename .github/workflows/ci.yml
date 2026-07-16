@@ -1,0 +1,41 @@
+name: CI
+
+on: ["push", "pull_request"]
+
+jobs:
+  rust:
+    name: rust (fmt / clippy / parity tests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: rustfmt
+        run: cargo fmt --all --check
+      - name: clippy
+        run: cargo clippy --workspace --release --all-targets -- -D warnings
+      # The R-parity fixtures are committed, so this needs no R install.
+      - name: cargo test (R-parity fixtures)
+        run: cargo test -p glmnet-core --release
+
+  python:
+    name: python (${{ matrix.os }}, py${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python: ["3.9", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: install (builds the Rust extension via maturin)
+        run: pip install ".[test]"
+      - name: pytest
+        run: pytest tests/test_python.py -v

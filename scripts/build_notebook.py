@@ -41,7 +41,7 @@ cells = [
         "import pathlib\n"
         "import numpy as np\n"
         "import matplotlib.pyplot as plt\n"
-        "from glmnet import glmnet, cv_glmnet\n"
+        "from glmnetrs import glmnet, cv_glmnet\n"
         "\n"
         "# Find the repo's datasets/ dir whether this runs from the repo root or examples/.\n"
         "here = pathlib.Path.cwd()\n"
@@ -197,7 +197,7 @@ cells = [
         "factor on the L2 term) is handled for you."
     ),
     code(
-        "from glmnet.sklearn import ElasticNet, LogisticRegression\n"
+        "from glmnetrs.sklearn import ElasticNet, LogisticRegression\n"
         "en = ElasticNet(alpha=0.1, l1_ratio=0.5).fit(Xw, yw)\n"
         "clf = LogisticRegression(C=1.0).fit(Xl, yl)\n"
         "print('ElasticNet nonzero coefs:', int(np.count_nonzero(en.coef_)))\n"

@@ -17,8 +17,7 @@ import sys
 import time
 
 import numpy as np
-
-from glmnet import glmnet
+from glmnetrs import glmnet
 
 HERE = pathlib.Path(__file__).parent
 SCRATCH = HERE / ".bench_data"
@@ -27,19 +26,19 @@ SCRATCH.mkdir(exist_ok=True)
 # (name, n, p, family). Chosen to span the regimes glmnet is used in:
 # small, tall (n >> p), square-ish, and wide (p >> n, e.g. genomics/text).
 CASES = [
-    ("small",    200,    20, "gaussian"),
-    ("tall",   10000,    50, "gaussian"),
-    ("medium",  1000,   200, "gaussian"),
-    ("square",  2000,  1000, "gaussian"),
-    ("wide",     200,  5000, "gaussian"),
-    ("bin_small",   200,   20, "binomial"),
-    ("bin_tall",  10000,   50, "binomial"),
-    ("bin_medium", 1000,  200, "binomial"),
-    ("bin_wide",    200, 2000, "binomial"),
-    ("pois_small",   200,   20, "poisson"),
-    ("pois_tall",  10000,   50, "poisson"),
-    ("pois_medium", 1000,  200, "poisson"),
-    ("pois_wide",    200, 2000, "poisson"),
+    ("small", 200, 20, "gaussian"),
+    ("tall", 10000, 50, "gaussian"),
+    ("medium", 1000, 200, "gaussian"),
+    ("square", 2000, 1000, "gaussian"),
+    ("wide", 200, 5000, "gaussian"),
+    ("bin_small", 200, 20, "binomial"),
+    ("bin_tall", 10000, 50, "binomial"),
+    ("bin_medium", 1000, 200, "binomial"),
+    ("bin_wide", 200, 2000, "binomial"),
+    ("pois_small", 200, 20, "poisson"),
+    ("pois_tall", 10000, 50, "poisson"),
+    ("pois_medium", 1000, 200, "poisson"),
+    ("pois_wide", 200, 2000, "poisson"),
 ]
 
 REPEATS = 7
@@ -89,14 +88,18 @@ def main():
 
         ours, lmu = time_ours(X, y, family)
         results.append({**meta, "ours_s": ours, "lmu": lmu})
-        print(f"  [ours] {name:12s} n={n:<6d} p={p:<5d} {family:9s} "
-              f"{ours*1e3:8.2f} ms   lmu={lmu}", flush=True)
+        print(
+            f"  [ours] {name:12s} n={n:<6d} p={p:<5d} {family:9s} "
+            f"{ours*1e3:8.2f} ms   lmu={lmu}",
+            flush=True,
+        )
 
     (SCRATCH / "cases.json").write_text(json.dumps([c[0] for c in CASES]))
     print("\nRunning R glmnet on the same data ...\n", flush=True)
     r = subprocess.run(
         ["Rscript", str(HERE / "bench.R")],
-        capture_output=True, text=True,
+        capture_output=True,
+        text=True,
     )
     if r.returncode != 0:
         print("R benchmark failed:\n", r.stderr, file=sys.stderr)
@@ -106,15 +109,19 @@ def main():
 
     # --- combined table ---
     print("\n" + "=" * 78)
-    print(f"{'case':12s} {'n':>6s} {'p':>5s} {'family':9s} "
-          f"{'ours':>9s} {'R':>9s} {'speedup':>8s} {'lmu':>5s}")
+    print(
+        f"{'case':12s} {'n':>6s} {'p':>5s} {'family':9s} "
+        f"{'ours':>9s} {'R':>9s} {'speedup':>8s} {'lmu':>5s}"
+    )
     print("-" * 78)
     for row in results:
         rt = r_times.get(row["name"])
         rt_s = f"{rt*1e3:7.1f}ms" if rt else "   n/a"
         speed = f"{rt/row['ours_s']:6.2f}x" if rt else "   -"
-        print(f"{row['name']:12s} {row['n']:>6d} {row['p']:>5d} {row['family']:9s} "
-              f"{row['ours_s']*1e3:7.1f}ms {rt_s:>9s} {speed:>8s} {row['lmu']:>5d}")
+        print(
+            f"{row['name']:12s} {row['n']:>6d} {row['p']:>5d} {row['family']:9s} "
+            f"{row['ours_s']*1e3:7.1f}ms {rt_s:>9s} {speed:>8s} {row['lmu']:>5d}"
+        )
     print("=" * 78)
 
 

@@ -15,8 +15,7 @@ import sys
 import time
 
 import numpy as np
-
-from glmnet import glmnet
+from glmnetrs import glmnet
 
 HERE = pathlib.Path(__file__).parent
 DATA = HERE / ".." / "datasets"
